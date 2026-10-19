@@ -1,6 +1,7 @@
 import { WebSocketServer } from 'ws';
 import { randomUUID } from 'node:crypto';
 import sessionEngine from './session-engine.js';
+import WorldInfoEngine from './world-info-engine.js';
 
 export class WebSocketBridge {
     constructor() {
@@ -144,6 +145,9 @@ export class WebSocketBridge {
                     break;
                 case 'getSessionSummary':
                     result = session.getSummary();
+                    break;
+                case 'scanWorldInfo':
+                    result = WorldInfoEngine.scan(params);
                     break;
                 default:
                     error = `Unknown method: ${method}`;
