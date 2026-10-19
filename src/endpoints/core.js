@@ -1,16 +1,14 @@
 import express from 'express';
-import sessionEngine from '../core/session-engine.js';
 import WorldInfoEngine from '../core/world-info-engine.js';
 import PromptEngine from '../core/prompt-engine.js';
 
 export const router = express.Router();
 
 router.get('/status', (req, res) => {
-    const session = sessionEngine.getSession('default');
+    // P0 Security: Do not expose default session details or user chat summaries
     res.json({
         ok: true,
-        summary: session.getSummary(),
-        activeSessions: sessionEngine.sessions.size,
+        bridgeDisabled: true,
     });
 });
 
@@ -32,13 +30,13 @@ router.post('/prompt/assemble', (req, res) => {
     }
 });
 
-router.post('/chat-completions/generate', async (req, res, next) => {
-    try {
-        const { default: ChatCompletionEngine } = await import('../core/chat-completion-engine.js');
-        await ChatCompletionEngine.generate(req, res);
-    } catch (err) {
-        next(err);
-    }
+router.post('/chat-completions/generate', async (req, res) => {
+    // P0 Security: Core generation routing is disabled by default to prevent SSRF and multi-user data leak.
+    res.status(403).json({
+        error: {
+            message: 'Core generation routing is disabled by default for security.',
+        },
+    });
 });
 
 export default router;

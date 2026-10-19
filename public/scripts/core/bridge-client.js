@@ -50,24 +50,26 @@ export class BridgeClient {
                 this.scheduleReconnect();
             };
 
-            this.ws.onerror = (err) => {
-                console.warn('[Core Bridge] WebSocket error:', err);
-                this.ws.close();
+            this.ws.onerror = () => {
+                if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+                    this.ws.close();
+                }
             };
-        } catch (e) {
-            console.error('[Core Bridge] Connection failed:', e);
+        } catch {
             this.scheduleReconnect();
         }
     }
 
     scheduleReconnect() {
         if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-        const delay = Math.min(1000 * Math.pow(1.5, this.reconnectAttempts), 15000);
+        // P0 Security: Stop reconnection when bridge upgrade is disabled/rejected to avoid log spam
+        if (this.reconnectAttempts >= 1) {
+            return;
+        }
         this.reconnectAttempts++;
         this.reconnectTimer = setTimeout(() => {
-            console.log(`[Core Bridge] Reconnecting (attempt ${this.reconnectAttempts})...`);
             this.connect();
-        }, delay);
+        }, 2000);
     }
 
     async handleMessage(rawData) {

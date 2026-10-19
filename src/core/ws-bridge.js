@@ -68,6 +68,9 @@ export class WebSocketBridge {
                 client.ping();
             }
         }, 30000);
+        if (this.heartbeatTimer && typeof this.heartbeatTimer.unref === 'function') {
+            this.heartbeatTimer.unref();
+        }
     }
 
     #bindSessionEngine() {
@@ -82,16 +85,17 @@ export class WebSocketBridge {
      * @param {import('http').Server | import('https').Server} server
      */
     attachServer(server) {
-        server.on('upgrade', (request, socket, head) => {
+        server.on('upgrade', (request, socket) => {
             try {
                 const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
-                if (url.pathname === '/api/bridge/ws') {
-                    this.wss.handleUpgrade(request, socket, head, (ws) => {
-                        this.wss.emit('connection', ws, request);
-                    });
+                const cleanPath = url.pathname.replace(/\/+$/, '') || '/';
+                if (cleanPath === '/api/bridge/ws') {
+                    // P0 Security: Unauthenticated Core WS upgrade is disabled by default.
+                    socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Type: text/plain\r\n\r\nForbidden: Core WebSocket Bridge upgrade is disabled.\r\n');
+                    socket.destroy();
                 }
-            } catch (err) {
-                socket.destroy();
+            } catch {
+                // Ignore parse failures to avoid interfering with other upgrade handlers
             }
         });
     }
@@ -234,7 +238,10 @@ export class WebSocketBridge {
     }
 
     close() {
-        if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+        if (this.heartbeatTimer) {
+            clearInterval(this.heartbeatTimer);
+            this.heartbeatTimer = null;
+        }
         this.wss.close();
     }
 }
