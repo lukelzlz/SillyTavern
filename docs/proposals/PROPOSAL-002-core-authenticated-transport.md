@@ -1,14 +1,21 @@
 ---
 id: PROPOSAL-002
 title: SillyTavern 核心双向传输协议安全认证与工单鉴权机制 (Core Authenticated Transport Architecture)
-status: draft
+status: accepted
 author: Agent (文档架构员) & User
 date: 2026-10-19
+acceptedDate: 2026-10-20
 branch: docs/core-ws-auth-design
+implementationBranch: feat/core-authenticated-transport
 worktree: ../SillyTavern-core-auth-docs
 ---
 
 # PROPOSAL-002: SillyTavern 核心双向传输协议安全认证与工单鉴权机制
+
+- **状态 (Status)**: Accepted (接受日期: 2026-10-20, 用户明确回复“确认开工”)
+- **实现分支 (Implementation Branch)**: `feat/core-authenticated-transport`
+- **文档分支 (Doc Branch)**: `docs/core-ws-auth-design`
+- **关联决策 (Related ADR)**: `docs/decisions/ADR-002-core-ws-ticket-authentication.md`
 
 ## 1. 业务背景与安全审查发现
 
@@ -57,7 +64,7 @@ worktree: ../SillyTavern-core-auth-docs
 
 ---
 
-## 3. 核心用户故事 (User Stories - 待审批草案)
+## 3. 核心用户故事 (User Stories - 已批准)
 
 ### Story 1: 正常已登录用户无缝建立安全长连接
 - **场景**：用户 Alice 在多用户模式下通过账号密码登录了 SillyTavern，前端页面加载核心模块。

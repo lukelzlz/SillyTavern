@@ -1,11 +1,17 @@
 ---
 id: ADR-002
 title: 核心 WebSocket 采用 HTTP CSRF 守卫换发短期单次 Ticket 与 Sec-WebSocket-Protocol 传输
-status: proposed
+status: accepted
 date: 2026-10-19
+acceptedDate: 2026-10-20
+implementationBranch: feat/core-authenticated-transport
 ---
 
 # ADR-002: 核心 WebSocket 采用 HTTP CSRF 守卫换发短期单次 Ticket 与 Sec-WebSocket-Protocol 传输
+
+- **状态 (Status)**: Accepted (接受日期: 2026-10-20, 用户明确回复“确认开工”)
+- **实现分支 (Implementation Branch)**: `feat/core-authenticated-transport`
+- **关联提案 (Related Proposal)**: `docs/proposals/PROPOSAL-002-core-authenticated-transport.md`
 
 ## 1. 决策背景 (Context)
 
