@@ -2,6 +2,7 @@ import { WebSocketServer } from 'ws';
 import { randomUUID } from 'node:crypto';
 import sessionEngine from './session-engine.js';
 import WorldInfoEngine from './world-info-engine.js';
+import PromptEngine from './prompt-engine.js';
 
 export class WebSocketBridge {
     constructor() {
@@ -148,6 +149,9 @@ export class WebSocketBridge {
                     break;
                 case 'scanWorldInfo':
                     result = WorldInfoEngine.scan(params);
+                    break;
+                case 'assemblePrompt':
+                    result = PromptEngine.assemble(params);
                     break;
                 default:
                     error = `Unknown method: ${method}`;
