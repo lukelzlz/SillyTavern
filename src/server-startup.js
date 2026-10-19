@@ -51,6 +51,8 @@ import { router as dataMaidRouter } from './endpoints/data-maid.js';
 import { router as backupsRouter } from './endpoints/backups.js';
 import { router as imageMetadataRouter } from './endpoints/image-metadata.js';
 import { router as volcengineRouter } from './endpoints/volcengine.js';
+import { router as coreRouter } from './endpoints/core.js';
+import { wsBridge } from './core/ws-bridge.js';
 
 /**
  * @typedef {object} ServerStartupResult
@@ -185,6 +187,7 @@ export function setupPrivateEndpoints(app) {
     app.use('/api/data-maid', dataMaidRouter);
     app.use('/api/backups', backupsRouter);
     app.use('/api/image-metadata', imageMetadataRouter);
+    app.use('/api/core', coreRouter);
 }
 
 /**
@@ -281,6 +284,7 @@ export class ServerStartup {
                 passphrase: String(this.cliArgs.keyPassphrase ?? ''),
             };
             const server = https.createServer(sslOptions, this.app);
+            wsBridge.attachServer(server);
             server.on('error', reject);
             server.on('listening', resolve);
 
@@ -304,6 +308,7 @@ export class ServerStartup {
     #createHttpServer(url, ipVersion) {
         return new Promise((resolve, reject) => {
             const server = http.createServer(this.app);
+            wsBridge.attachServer(server);
             server.on('error', reject);
             server.on('listening', resolve);
 

@@ -111,10 +111,12 @@ import { updateReasoningUI, parseReasoningFromString, getReasoningTemplateByName
 import { IGNORE_SYMBOL } from './constants.js';
 import { macros } from './macros/macro-system.js';
 import { MessageFormatter } from './message-formatter.js';
+import { coreBridge } from './core/bridge-client.js';
 
 export function getContext() {
     return {
         accountStorage,
+        coreBridge,
         chat,
         characters,
         groups,
