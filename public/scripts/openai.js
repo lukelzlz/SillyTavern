@@ -1616,7 +1616,12 @@ export async function prepareOpenAIMessages({
     const chat = chatCompletion.getChat();
 
     const eventData = { chat, dryRun };
-    await eventSource.emit(event_types.CHAT_COMPLETION_PROMPT_READY, eventData);
+    // The server Core owns this lifecycle hook for its managed Custom API path.
+    // Other providers retain the original client-side event contract.
+    const serverManagedCustomApi = window.coreBridge?.isConnected && oai_settings.chat_completion_source === chat_completion_sources.CUSTOM;
+    if (!serverManagedCustomApi) {
+        await eventSource.emit(event_types.CHAT_COMPLETION_PROMPT_READY, eventData);
+    }
 
     openai_messages_count = chat.filter(x => !x?.tool_calls && ['user', 'assistant', 'tool'].includes(x?.role)).length || 0;
 
@@ -3145,7 +3150,10 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
     const { generate_data, stream, canMultiSwipe } = await createGenerationParameters(oai_settings, model, type, messages, { jsonSchema });
     await eventSource.emit(event_types.CHAT_COMPLETION_SETTINGS_READY, generate_data);
 
-    const generate_url = '/api/backends/chat-completions/generate';
+    const serverManagedCustomApi = window.coreBridge?.isConnected && oai_settings.chat_completion_source === chat_completion_sources.CUSTOM;
+    const generate_url = serverManagedCustomApi
+        ? '/api/core/chat-completions/generate'
+        : '/api/backends/chat-completions/generate';
     const response = await fetch(generate_url, {
         method: 'POST',
         body: JSON.stringify(generate_data),

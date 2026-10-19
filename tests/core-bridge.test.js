@@ -132,7 +132,7 @@ async function runTests() {
             'default',
             'CHAT_COMPLETION_PROMPT_READY',
             { prompt: 'Original system prompt' },
-            2000
+            2000,
         );
 
         if (!interceptedPayload.intercepted || interceptedPayload.modifiedBy !== 'Plugin-Alpha') {

@@ -32,4 +32,13 @@ router.post('/prompt/assemble', (req, res) => {
     }
 });
 
+router.post('/chat-completions/generate', async (req, res, next) => {
+    try {
+        const { default: ChatCompletionEngine } = await import('../core/chat-completion-engine.js');
+        await ChatCompletionEngine.generate(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
 export default router;

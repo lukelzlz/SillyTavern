@@ -1,4 +1,4 @@
-import { eventSource } from '../script.js';
+import { eventSource } from '../../script.js';
 
 /**
  * BridgeClient handles WebSocket connection to the server Headless Core,

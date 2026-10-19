@@ -3,9 +3,9 @@
  */
 export const WI_LOGIC = Object.freeze({
     AND_ANY: 0,
-    AND_ALL: 1,
+    NOT_ALL: 1,
     NOT_ANY: 2,
-    NOT_ALL: 3,
+    AND_ALL: 3,
 });
 
 /**

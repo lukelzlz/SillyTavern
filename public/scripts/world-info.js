@@ -4755,7 +4755,10 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
     // If core bridge is connected, delegate heavy regex scanning and recursion to Node.js server
     if (coreBridge && coreBridge.isConnected) {
         try {
-            const scanText = buffer.get(null, scan_state.INITIAL);
+            const scanText = chat
+                .map(message => typeof message === 'string' ? message : (message?.mes || ''))
+                .filter(Boolean)
+                .join('\n');
             const serverResult = await coreBridge.call('scanWorldInfo', {
                 entries: sortedEntries,
                 text: scanText,
