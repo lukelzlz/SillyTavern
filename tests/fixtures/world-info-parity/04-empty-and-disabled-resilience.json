@@ -1,0 +1,91 @@
+{
+  "name": "04-empty-and-disabled-resilience",
+  "description": "Validates dirty data resilience including disabled entries, empty contents, missing keys, default depth fallbacks, and trigger filtering",
+  "input": {
+    "chatMessages": [
+      "The hero entered the grand ancient castle."
+    ],
+    "globalScanData": {
+      "trigger": "normal",
+      "personaDescription": "",
+      "characterDescription": "",
+      "characterPersonality": "",
+      "characterDepthPrompt": "",
+      "scenario": "",
+      "creatorNotes": ""
+    },
+    "entries": [
+      {
+        "uid": "dirty-1-disabled",
+        "comment": "Explicitly disabled entry",
+        "disable": true,
+        "key": ["castle"],
+        "position": 0,
+        "order": 10,
+        "content": "Disabled Castle Lore."
+      },
+      {
+        "uid": "dirty-2-empty-keys",
+        "comment": "Empty key array",
+        "key": [],
+        "position": 0,
+        "order": 20,
+        "content": "No keys defined."
+      },
+      {
+        "uid": "dirty-3-empty-content",
+        "comment": "Matched key but empty content string",
+        "key": ["castle"],
+        "position": 1,
+        "order": 30,
+        "content": ""
+      },
+      {
+        "uid": "dirty-4-default-depth",
+        "comment": "atDepth missing depth and role properties",
+        "key": ["castle"],
+        "position": 4,
+        "order": 40,
+        "content": "Castle dungeon at default depth 4"
+      },
+      {
+        "uid": "dirty-5-trigger-mismatch",
+        "comment": "Entry restricted to 'quiet' trigger",
+        "key": ["castle"],
+        "triggers": ["quiet"],
+        "position": 0,
+        "order": 50,
+        "content": "Quiet mode only lore"
+      }
+    ],
+    "options": {
+      "budget": 0,
+      "matchWholeWords": false,
+      "trigger": "normal"
+    }
+  },
+  "recordedTokens": {
+    "": 0,
+    "Castle dungeon at default depth 4": 6,
+    "Castle dungeon at default depth 4\n": 6
+  },
+  "expectedOutput": {
+    "worldInfoBefore": "",
+    "worldInfoAfter": "",
+    "EMEntries": [],
+    "WIDepthEntries": [
+      {
+        "depth": 4,
+        "role": 0,
+        "entries": ["Castle dungeon at default depth 4"]
+      }
+    ],
+    "ANBeforeEntries": [],
+    "ANAfterEntries": [],
+    "outletEntries": {},
+    "activatedEntryUids": [
+      "dirty-3-empty-content",
+      "dirty-4-default-depth"
+    ]
+  }
+}

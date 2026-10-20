@@ -1,0 +1,129 @@
+{
+  "name": "05-global-scan-data-sources",
+  "description": "Validates all 6 WIGlobalScanData independent scan sources and trigger match filters with zero chat history",
+  "input": {
+    "chatMessages": [],
+    "globalScanData": {
+      "trigger": "continue",
+      "personaDescription": "User is an elite Cyber Hacker named Neo.",
+      "characterDescription": "Assistant is Trinity, a master tactician and martial artist.",
+      "characterPersonality": "Stoic, calm under pressure, loyal to the resistance.",
+      "characterDepthPrompt": "Keep responses immersive and focused on the Matrix simulation.",
+      "scenario": "They are trapped inside a high-security mega-corporation data tower.",
+      "creatorNotes": "Based on cyberpunk lore and virtual construct protocols."
+    },
+    "entries": [
+      {
+        "uid": "src-persona",
+        "comment": "Matches via personaDescription",
+        "key": ["Neo"],
+        "matchPersonaDescription": true,
+        "position": 0,
+        "order": 10,
+        "content": "Persona Context: Neo's digital avatar."
+      },
+      {
+        "uid": "src-persona-unmatched",
+        "comment": "Has Neo key but matchPersonaDescription is false",
+        "key": ["Neo"],
+        "matchPersonaDescription": false,
+        "position": 0,
+        "order": 15,
+        "content": "Should not match because matchPersonaDescription is false."
+      },
+      {
+        "uid": "src-chara-desc",
+        "comment": "Matches via characterDescription",
+        "key": ["Trinity"],
+        "matchCharacterDescription": true,
+        "position": 1,
+        "order": 20,
+        "content": "Trinity Combat Profile: Master of agile combat."
+      },
+      {
+        "uid": "src-chara-personality",
+        "comment": "Matches via characterPersonality",
+        "key": ["Stoic"],
+        "matchCharacterPersonality": true,
+        "position": 2,
+        "order": 30,
+        "content": "Psychological Profile: Unshakable resolve."
+      },
+      {
+        "uid": "src-depth-prompt",
+        "comment": "Matches via characterDepthPrompt",
+        "key": ["simulation"],
+        "matchCharacterDepthPrompt": true,
+        "position": 3,
+        "order": 40,
+        "content": "Simulation Mechanics: Virtual physics engine active."
+      },
+      {
+        "uid": "src-scenario",
+        "comment": "Matches via scenario",
+        "key": ["mega-corporation"],
+        "matchScenario": true,
+        "position": 5,
+        "order": 50,
+        "content": "Environment Hazard: Corp ICE firewall active."
+      },
+      {
+        "uid": "src-creator-notes",
+        "comment": "Matches via creatorNotes",
+        "key": ["construct"],
+        "matchCreatorNotes": true,
+        "position": 7,
+        "outletName": "author_lore",
+        "order": 60,
+        "content": "Construct Genesis: Virtual workspace memo."
+      },
+      {
+        "uid": "src-trigger-check",
+        "comment": "Matches continue trigger filter and characterDescription",
+        "key": ["Trinity"],
+        "matchCharacterDescription": true,
+        "triggers": ["continue"],
+        "position": 6,
+        "order": 70,
+        "content": "Continue Mode Action Directive."
+      }
+    ],
+    "options": {
+      "budget": 0,
+      "matchWholeWords": false,
+      "trigger": "continue"
+    }
+  },
+  "recordedTokens": {
+    "Persona Context: Neo's digital avatar.": 7,
+    "Trinity Combat Profile: Master of agile combat.": 7,
+    "Psychological Profile: Unshakable resolve.": 5,
+    "Simulation Mechanics: Virtual physics engine active.": 6,
+    "Environment Hazard: Corp ICE firewall active.": 7,
+    "Construct Genesis: Virtual workspace memo.": 6,
+    "Continue Mode Action Directive.": 5
+  },
+  "expectedOutput": {
+    "worldInfoBefore": "Persona Context: Neo's digital avatar.",
+    "worldInfoAfter": "Trinity Combat Profile: Master of agile combat.",
+    "EMEntries": [
+      { "position": 0, "content": "Environment Hazard: Corp ICE firewall active." },
+      { "position": 1, "content": "Continue Mode Action Directive." }
+    ],
+    "WIDepthEntries": [],
+    "ANBeforeEntries": ["Psychological Profile: Unshakable resolve."],
+    "ANAfterEntries": ["Simulation Mechanics: Virtual physics engine active."],
+    "outletEntries": {
+      "author_lore": ["Construct Genesis: Virtual workspace memo."]
+    },
+    "activatedEntryUids": [
+      "src-persona",
+      "src-chara-desc",
+      "src-chara-personality",
+      "src-depth-prompt",
+      "src-scenario",
+      "src-creator-notes",
+      "src-trigger-check"
+    ]
+  }
+}
