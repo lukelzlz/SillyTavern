@@ -41,6 +41,24 @@ describe('Core Authentication & Reverse Proxy Security Regression (Live Server S
             password: 'eve-pass-456',
             admin: false,
         },
+        frank: {
+            handle: 'frank',
+            name: 'Frank TrailingLogout',
+            password: 'frank-pass-123',
+            admin: false,
+        },
+        grace: {
+            handle: 'grace',
+            name: 'Grace TrailingDisable',
+            password: 'grace-pass-456',
+            admin: false,
+        },
+        heidi: {
+            handle: 'heidi',
+            name: 'Heidi TrailingAdminDisable',
+            password: 'heidi-pass-789',
+            admin: false,
+        },
     };
 
     beforeAll(async () => {
@@ -54,6 +72,9 @@ describe('Core Authentication & Reverse Proxy Security Regression (Live Server S
         await fixture.seedUser(testUsers.charlie);
         await fixture.seedUser(testUsers.dave);
         await fixture.seedUser(testUsers.eve);
+        await fixture.seedUser(testUsers.frank);
+        await fixture.seedUser(testUsers.grace);
+        await fixture.seedUser(testUsers.heidi);
     }, 90000);
 
     afterAll(async () => {
@@ -653,6 +674,132 @@ describe('Core Authentication & Reverse Proxy Security Regression (Live Server S
             const conn = await fixture.connectWs({ ticket, origin: fixture.baseUrl });
             expect(conn.status).toBe(403);
             expect(conn.ws).toBeNull();
+        });
+
+        test('BLK-AUTH-01 Regression: Active WebSocket is actively closed (4001) and unconsumed tickets revoked when user logs out with trailing slash (/api/users/logout/)', async () => {
+            const auth = await fixture.login(testUsers.frank.handle, testUsers.frank.password);
+            const ctx = await fixture.getSessionContext(auth.cookie);
+
+            // 1. Issue ticket for active WebSocket connection
+            const ticketRes1 = await fixture.requestTicket(auth.cookie, ctx.csrfToken);
+            expect(ticketRes1.status).toBe(200);
+            const { ticket: activeTicket } = await ticketRes1.json();
+
+            // 2. Establish active WebSocket connection
+            const conn = await fixture.connectWs({ ticket: activeTicket, origin: fixture.baseUrl });
+            expect(conn.status).toBe(101);
+            expect(conn.ws).not.toBeNull();
+
+            // 3. Issue another ticket prior to logout (unconsumed)
+            const ticketRes2 = await fixture.requestTicket(auth.cookie, ctx.csrfToken);
+            expect(ticketRes2.status).toBe(200);
+            const { ticket: unconsumedTicket } = await ticketRes2.json();
+
+            // 4. Perform logout with trailing slash (/api/users/logout/) via real HTTP fetch
+            const logoutRes = await fetch(`${fixture.baseUrl}/api/users/logout/`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-csrf-token': ctx.csrfToken,
+                    cookie: auth.cookie,
+                },
+            });
+            expect(logoutRes.status).toBe(204);
+
+            // 5. Active connection MUST be terminated by server with code 4001
+            const closeInfo = await waitForWsClose(conn.ws, 2000);
+            expect(closeInfo.code).toBe(4001);
+
+            // 6. Unconsumed ticket issued before trailing slash logout MUST be revoked and return 403
+            const connAfterLogout = await fixture.connectWs({ ticket: unconsumedTicket, origin: fixture.baseUrl });
+            expect(connAfterLogout.status).toBe(403);
+            expect(connAfterLogout.ws).toBeNull();
+        });
+
+        test('BLK-AUTH-01 Regression: Active WebSocket is closed (4001) and unconsumed tickets revoked when admin disables user with trailing slash (/api/users/disable/)', async () => {
+            const aliceAuth = await fixture.login(testUsers.alice.handle, testUsers.alice.password);
+            const graceAuth = await fixture.login(testUsers.grace.handle, testUsers.grace.password);
+            const graceCtx = await fixture.getSessionContext(graceAuth.cookie);
+
+            // 1. Issue ticket for active WebSocket connection
+            const ticketRes1 = await fixture.requestTicket(graceAuth.cookie, graceCtx.csrfToken);
+            expect(ticketRes1.status).toBe(200);
+            const { ticket: activeTicket } = await ticketRes1.json();
+
+            // 2. Establish active WebSocket connection for Grace
+            const conn = await fixture.connectWs({ ticket: activeTicket, origin: fixture.baseUrl });
+            expect(conn.status).toBe(101);
+            expect(conn.ws).not.toBeNull();
+
+            // 3. Issue another ticket prior to disable (unconsumed)
+            const ticketRes2 = await fixture.requestTicket(graceAuth.cookie, graceCtx.csrfToken);
+            expect(ticketRes2.status).toBe(200);
+            const { ticket: unconsumedTicket } = await ticketRes2.json();
+
+            // 4. Admin disables Grace using trailing slash path (/api/users/disable/) via real HTTP fetch
+            const aliceCtx = await fixture.getSessionContext(aliceAuth.cookie);
+            const disableRes = await fetch(`${fixture.baseUrl}/api/users/disable/`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-csrf-token': aliceCtx.csrfToken,
+                    cookie: aliceAuth.cookie,
+                },
+                body: JSON.stringify({ handle: testUsers.grace.handle }),
+            });
+            expect(disableRes.status).toBe(204);
+
+            // 5. Active connection for Grace MUST be terminated by server with code 4001
+            const closeInfo = await waitForWsClose(conn.ws, 2000);
+            expect(closeInfo.code).toBe(4001);
+
+            // 6. Unconsumed ticket issued before trailing slash disable MUST be revoked and return 403
+            const connAfterDisable = await fixture.connectWs({ ticket: unconsumedTicket, origin: fixture.baseUrl });
+            expect(connAfterDisable.status).toBe(403);
+            expect(connAfterDisable.ws).toBeNull();
+        });
+
+        test('BLK-AUTH-01 Regression: Active WebSocket is closed (4001) and unconsumed tickets revoked when admin disables user via /api/users/admin/disable/', async () => {
+            const aliceAuth = await fixture.login(testUsers.alice.handle, testUsers.alice.password);
+            const heidiAuth = await fixture.login(testUsers.heidi.handle, testUsers.heidi.password);
+            const heidiCtx = await fixture.getSessionContext(heidiAuth.cookie);
+
+            // 1. Issue ticket for active WebSocket connection
+            const ticketRes1 = await fixture.requestTicket(heidiAuth.cookie, heidiCtx.csrfToken);
+            expect(ticketRes1.status).toBe(200);
+            const { ticket: activeTicket } = await ticketRes1.json();
+
+            // 2. Establish active WebSocket connection for Heidi
+            const conn = await fixture.connectWs({ ticket: activeTicket, origin: fixture.baseUrl });
+            expect(conn.status).toBe(101);
+            expect(conn.ws).not.toBeNull();
+
+            // 3. Issue another ticket prior to disable (unconsumed)
+            const ticketRes2 = await fixture.requestTicket(heidiAuth.cookie, heidiCtx.csrfToken);
+            expect(ticketRes2.status).toBe(200);
+            const { ticket: unconsumedTicket } = await ticketRes2.json();
+
+            // 4. Admin disables Heidi using trailing slash subroute (/api/users/admin/disable/) via real HTTP fetch
+            const aliceCtx = await fixture.getSessionContext(aliceAuth.cookie);
+            const disableRes = await fetch(`${fixture.baseUrl}/api/users/admin/disable/`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-csrf-token': aliceCtx.csrfToken,
+                    cookie: aliceAuth.cookie,
+                },
+                body: JSON.stringify({ handle: testUsers.heidi.handle }),
+            });
+            expect(disableRes.status).toBe(204);
+
+            // 5. Active connection for Heidi MUST be terminated by server with code 4001
+            const closeInfo = await waitForWsClose(conn.ws, 2000);
+            expect(closeInfo.code).toBe(4001);
+
+            // 6. Unconsumed ticket issued before trailing slash disable MUST be revoked and return 403
+            const connAfterDisable = await fixture.connectWs({ ticket: unconsumedTicket, origin: fixture.baseUrl });
+            expect(connAfterDisable.status).toBe(403);
+            expect(connAfterDisable.ws).toBeNull();
         });
     });
 });

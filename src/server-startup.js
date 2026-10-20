@@ -146,7 +146,19 @@ export function setupPrivateEndpoints(app) {
 
         response.on('finish', () => {
             if (response.statusCode >= 200 && response.statusCode < 300) {
-                const subPath = request.path.replace(/^\/admin/, '');
+                let rawPath = request.path || '';
+                try {
+                    rawPath = decodeURIComponent(rawPath);
+                } catch {
+                    // Ignore decode failure
+                }
+                const normalizedPath = rawPath
+                    .replace(/\/+/g, '/')
+                    .replace(/\/+$/, '')
+                    .toLowerCase() || '/';
+
+                const subPath = (normalizedPath.startsWith('/admin/') ? normalizedPath.slice('/admin'.length) : normalizedPath) || '/';
+
                 if (subPath === '/logout') {
                     if (originalHandle) {
                         wsBridge.terminateUserConnections(originalHandle, 4001, 'Session Revoked');
