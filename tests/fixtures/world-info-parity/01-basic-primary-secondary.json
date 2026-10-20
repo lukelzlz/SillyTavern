@@ -1,0 +1,113 @@
+{
+  "name": "01-basic-primary-secondary",
+  "description": "Validates primary/secondary keywords logic (AND_ANY, NOT_ANY, AND_ALL, NOT_ALL), regex matching, whole words, and case sensitivity",
+  "input": {
+    "chatMessages": [
+      "The brave adventurer encountered a fierce Crimson Dragon in the fiery cavern.",
+      "A quiet goblin was sneaking through the shadows of the castle dungeon.",
+      "The wizard cast a powerful spell."
+    ],
+    "globalScanData": {
+      "trigger": "normal",
+      "personaDescription": "",
+      "characterDescription": "",
+      "characterPersonality": "",
+      "characterDepthPrompt": "",
+      "scenario": "",
+      "creatorNotes": ""
+    },
+    "entries": [
+      {
+        "uid": "entry-1",
+        "comment": "Dragon AND_ANY Crimson|Ice",
+        "key": ["Dragon"],
+        "selective": true,
+        "selectiveLogic": 0,
+        "keysecondary": ["Crimson", "Ice"],
+        "content": "Ancient Dragon Lore: A dragon with crimson scales.",
+        "position": 0,
+        "order": 10
+      },
+      {
+        "uid": "entry-2",
+        "comment": "Dragon AND_ALL Crimson&Ice (should fail on Ice)",
+        "key": ["Dragon"],
+        "selective": true,
+        "selectiveLogic": 3,
+        "keysecondary": ["Crimson", "Ice"],
+        "content": "Frostfire Dragon Lore.",
+        "position": 0,
+        "order": 20
+      },
+      {
+        "uid": "entry-3",
+        "comment": "Goblin NOT_ANY chieftain|boss with matchWholeWords (should pass)",
+        "key": ["goblin"],
+        "selective": true,
+        "selectiveLogic": 2,
+        "matchWholeWords": true,
+        "keysecondary": ["chieftain", "boss"],
+        "content": "Goblin Scout Report: Regular scout goblin.",
+        "position": 1,
+        "order": 15
+      },
+      {
+        "uid": "entry-4",
+        "comment": "Regex pattern /fiery\\s+cavern/i",
+        "key": ["/fiery\\s+cavern/i"],
+        "content": "Location: The Fiery Cavern glows with magma.",
+        "position": 1,
+        "order": 5
+      },
+      {
+        "uid": "entry-5",
+        "comment": "Wizard NOT_ALL powerful&necromancer (should pass)",
+        "key": ["wizard"],
+        "selective": true,
+        "selectiveLogic": 1,
+        "keysecondary": ["powerful", "necromancer"],
+        "content": "Wizard Guild Dossier: Friendly arcane practitioner.",
+        "position": 0,
+        "order": 30
+      },
+      {
+        "uid": "entry-6",
+        "comment": "Shadows exact case whole words",
+        "key": ["shadows"],
+        "caseSensitive": true,
+        "matchWholeWords": true,
+        "content": "Shadow Realm: Intruders wander in shadows.",
+        "position": 1,
+        "order": 25
+      }
+    ],
+    "options": {
+      "budget": 0,
+      "matchWholeWords": false,
+      "trigger": "normal"
+    }
+  },
+  "recordedTokens": {
+    "Ancient Dragon Lore: A dragon with crimson scales.": 11,
+    "Goblin Scout Report: Regular scout goblin.": 8,
+    "Location: The Fiery Cavern glows with magma.": 9,
+    "Wizard Guild Dossier: Friendly arcane practitioner.": 9,
+    "Shadow Realm: Intruders wander in shadows.": 8
+  },
+  "expectedOutput": {
+    "worldInfoBefore": "Ancient Dragon Lore: A dragon with crimson scales.\nWizard Guild Dossier: Friendly arcane practitioner.",
+    "worldInfoAfter": "Location: The Fiery Cavern glows with magma.\nGoblin Scout Report: Regular scout goblin.\nShadow Realm: Intruders wander in shadows.",
+    "EMEntries": [],
+    "WIDepthEntries": [],
+    "ANBeforeEntries": [],
+    "ANAfterEntries": [],
+    "outletEntries": {},
+    "activatedEntryUids": [
+      "entry-1",
+      "entry-3",
+      "entry-4",
+      "entry-5",
+      "entry-6"
+    ]
+  }
+}
