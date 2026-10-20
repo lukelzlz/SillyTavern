@@ -1,0 +1,171 @@
+{
+  "fixtureId": "GF-PROMPT-03-absolute-depth-order",
+  "description": "Validation of multi-tier depth injections (depth 0, 1, 4), priority order groups, and role concatenation",
+  "recordedAt": "2026-10-20T10:30:00Z",
+  "clientVersion": "1.19.0",
+  "input": {
+    "settings": {
+      "source": "openai",
+      "model": "gpt-4o",
+      "maxContext": 4096,
+      "maxTokens": 500,
+      "squashSystemMessages": false,
+      "pinExamples": true,
+      "newChatPrompt": "--- Chat Begins ---"
+    },
+    "generationControl": {
+      "type": "normal",
+      "bias": "",
+      "dryRun": false
+    },
+    "characterContext": {
+      "name1": "User",
+      "name2": "Char"
+    },
+    "worldInfo": {
+      "worldInfoBefore": "",
+      "worldInfoAfter": ""
+    },
+    "prompts": [
+      {
+        "identifier": "main",
+        "role": "system",
+        "content": "Main prompt"
+      },
+      {
+        "identifier": "d0_sys",
+        "role": "system",
+        "content": "Depth 0 system prompt",
+        "injection_position": "absolute",
+        "injection_depth": 0,
+        "injection_order": 100
+      },
+      {
+        "identifier": "d1_high",
+        "role": "system",
+        "content": "Depth 1 order 150 prompt",
+        "injection_position": "absolute",
+        "injection_depth": 1,
+        "injection_order": 150
+      },
+      {
+        "identifier": "d1_low",
+        "role": "user",
+        "content": "Depth 1 order 50 prompt",
+        "injection_position": "absolute",
+        "injection_depth": 1,
+        "injection_order": 50
+      },
+      {
+        "identifier": "d4_note",
+        "role": "assistant",
+        "content": "Depth 4 assistant note",
+        "injection_position": "absolute",
+        "injection_depth": 4,
+        "injection_order": 100
+      }
+    ],
+    "extensionPrompts": {},
+    "chatHistory": [
+      {
+        "role": "user",
+        "content": "Message 1"
+      },
+      {
+        "role": "assistant",
+        "content": "Message 2"
+      },
+      {
+        "role": "user",
+        "content": "Message 3"
+      },
+      {
+        "role": "assistant",
+        "content": "Message 4"
+      },
+      {
+        "role": "user",
+        "content": "Message 5"
+      }
+    ],
+    "messageExamples": [],
+    "toolsContext": {
+      "canPerformToolCalls": false
+    },
+    "recordedTokenCounts": {
+      "main": 5,
+      "newMainChat": 5,
+      "injected_depth_0_order_100_system": 8,
+      "injected_depth_1_order_150_system": 9,
+      "injected_depth_1_order_50_user": 8,
+      "injected_depth_4_order_100_assistant": 7,
+      "Message 1": 4,
+      "Message 2": 4,
+      "Message 3": 4,
+      "Message 4": 4,
+      "Message 5": 4
+    }
+  },
+  "expectedOutput": {
+    "chat": [
+      {
+        "role": "system",
+        "content": "Main prompt"
+      },
+      {
+        "role": "system",
+        "content": "--- Chat Begins ---"
+      },
+      {
+        "role": "user",
+        "content": "Message 1"
+      },
+      {
+        "role": "assistant",
+        "content": "Depth 4 assistant note"
+      },
+      {
+        "role": "assistant",
+        "content": "Message 2"
+      },
+      {
+        "role": "user",
+        "content": "Message 3"
+      },
+      {
+        "role": "assistant",
+        "content": "Message 4"
+      },
+      {
+        "role": "user",
+        "content": "Depth 1 order 50 prompt"
+      },
+      {
+        "role": "system",
+        "content": "Depth 1 order 150 prompt"
+      },
+      {
+        "role": "user",
+        "content": "Message 5"
+      },
+      {
+        "role": "system",
+        "content": "Depth 0 system prompt"
+      }
+    ],
+    "metadata": {
+      "totalBudget": 3596,
+      "tokensUsed": 65,
+      "remainingTokens": 3531,
+      "reservedTokens": {
+        "replyPriming": 3,
+        "controlPrompts": 0,
+        "tools": 0,
+        "newChatMessage": 5
+      },
+      "droppedHistoryCount": 0,
+      "squashedCount": 0,
+      "injectedPromptsCount": 4
+    }
+  }
+}

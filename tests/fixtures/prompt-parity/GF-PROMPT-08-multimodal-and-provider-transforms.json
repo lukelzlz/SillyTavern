@@ -1,0 +1,111 @@
+{
+  "fixtureId": "GF-PROMPT-08-multimodal-and-provider-transforms",
+  "description": "Validation of inline media attachment formatting and provider dialect transformations",
+  "recordedAt": "2026-10-20T11:45:00Z",
+  "clientVersion": "1.19.0",
+  "input": {
+    "settings": {
+      "source": "claude",
+      "model": "claude-3-5-sonnet-20241022",
+      "maxContext": 4096,
+      "maxTokens": 500,
+      "squashSystemMessages": false,
+      "pinExamples": true,
+      "newChatPrompt": "--- Chat Begins ---"
+    },
+    "generationControl": {
+      "type": "normal",
+      "bias": "",
+      "dryRun": false
+    },
+    "characterContext": {
+      "name1": "User",
+      "name2": "VisionBot"
+    },
+    "worldInfo": {
+      "worldInfoBefore": "",
+      "worldInfoAfter": ""
+    },
+    "prompts": [
+      {
+        "identifier": "main",
+        "role": "system",
+        "content": "You can analyze images."
+      }
+    ],
+    "extensionPrompts": {},
+    "chatHistory": [
+      {
+        "role": "user",
+        "content": "What is depicted in this image?",
+        "media": [
+          {
+            "type": "image",
+            "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+          }
+        ],
+        "mediaDisplay": "list"
+      },
+      {
+        "role": "assistant",
+        "content": "I see a single red pixel."
+      }
+    ],
+    "messageExamples": [],
+    "toolsContext": {
+      "canPerformToolCalls": false
+    },
+    "recordedTokenCounts": {
+      "main": 6,
+      "newMainChat": 5,
+      "chatHistory-1": 89,
+      "chatHistory-2": 8
+    }
+  },
+  "expectedOutput": {
+    "chat": [
+      {
+        "role": "system",
+        "content": "You can analyze images."
+      },
+      {
+        "role": "system",
+        "content": "--- Chat Begins ---"
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "What is depicted in this image?"
+          },
+          {
+            "type": "image_url",
+            "image_url": {
+              "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+              "detail": "auto"
+            }
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "I see a single red pixel."
+      }
+    ],
+    "metadata": {
+      "totalBudget": 3596,
+      "tokensUsed": 111,
+      "remainingTokens": 3485,
+      "reservedTokens": {
+        "replyPriming": 3,
+        "controlPrompts": 0,
+        "tools": 0,
+        "newChatMessage": 5
+      },
+      "droppedHistoryCount": 0,
+      "squashedCount": 0,
+      "injectedPromptsCount": 0
+    }
+  }
+}

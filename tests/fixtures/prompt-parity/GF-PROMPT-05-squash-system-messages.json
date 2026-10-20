@@ -1,0 +1,122 @@
+{
+  "fixtureId": "GF-PROMPT-05-squash-system-messages",
+  "description": "Validation of system message squashing with newline separation while protecting named system messages and whitelist identifiers",
+  "recordedAt": "2026-10-20T11:00:00Z",
+  "clientVersion": "1.19.0",
+  "input": {
+    "settings": {
+      "source": "openai",
+      "model": "gpt-4o",
+      "maxContext": 4096,
+      "maxTokens": 500,
+      "squashSystemMessages": true,
+      "pinExamples": true,
+      "newChatPrompt": "--- Chat Begins ---"
+    },
+    "generationControl": {
+      "type": "normal",
+      "bias": "",
+      "dryRun": false
+    },
+    "characterContext": {
+      "name1": "User",
+      "name2": "Char"
+    },
+    "worldInfo": {
+      "worldInfoBefore": "",
+      "worldInfoAfter": ""
+    },
+    "prompts": [
+      {
+        "identifier": "main",
+        "role": "system",
+        "content": "Instruction 1: Be concise."
+      },
+      {
+        "identifier": "sys2",
+        "role": "system",
+        "content": "Instruction 2: Be accurate."
+      },
+      {
+        "identifier": "narrator",
+        "role": "system",
+        "name": "Narrator",
+        "content": "The narrator speaks from above."
+      },
+      {
+        "identifier": "sys4",
+        "role": "system",
+        "content": "Instruction 3: Avoid repetition."
+      }
+    ],
+    "extensionPrompts": {},
+    "chatHistory": [
+      {
+        "role": "user",
+        "content": "Hello"
+      },
+      {
+        "role": "assistant",
+        "content": "Hi there!"
+      }
+    ],
+    "messageExamples": [],
+    "toolsContext": {
+      "canPerformToolCalls": false
+    },
+    "recordedTokenCounts": {
+      "main": 6,
+      "Instruction 1: Be concise.": 6,
+      "Instruction 2: Be accurate.": 6,
+      "Instruction 1: Be concise.\nInstruction 2: Be accurate.": 12,
+      "The narrator speaks from above.": 7,
+      "Instruction 3: Avoid repetition.": 6,
+      "newMainChat": 5,
+      "Hello": 2,
+      "Hi there!": 3
+    }
+  },
+  "expectedOutput": {
+    "chat": [
+      {
+        "role": "system",
+        "content": "Instruction 1: Be concise.\nInstruction 2: Be accurate."
+      },
+      {
+        "role": "system",
+        "name": "Narrator",
+        "content": "The narrator speaks from above."
+      },
+      {
+        "role": "system",
+        "content": "Instruction 3: Avoid repetition."
+      },
+      {
+        "role": "system",
+        "content": "--- Chat Begins ---"
+      },
+      {
+        "role": "user",
+        "content": "Hello"
+      },
+      {
+        "role": "assistant",
+        "content": "Hi there!"
+      }
+    ],
+    "metadata": {
+      "totalBudget": 3596,
+      "tokensUsed": 38,
+      "remainingTokens": 3558,
+      "reservedTokens": {
+        "replyPriming": 3,
+        "controlPrompts": 0,
+        "tools": 0,
+        "newChatMessage": 5
+      },
+      "droppedHistoryCount": 0,
+      "squashedCount": 1,
+      "injectedPromptsCount": 0
+    }
+  }
+}
