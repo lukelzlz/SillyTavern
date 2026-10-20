@@ -1,0 +1,142 @@
+{
+  "fixtureId": "GF-PROMPT-02-relative-injection",
+  "description": "Validation of Author's Note and Summary relative injection to main prompt (start and end)",
+  "recordedAt": "2026-10-20T10:15:00Z",
+  "clientVersion": "1.19.0",
+  "input": {
+    "settings": {
+      "source": "openai",
+      "model": "gpt-4o",
+      "maxContext": 4096,
+      "maxTokens": 500,
+      "squashSystemMessages": false,
+      "pinExamples": true,
+      "newChatPrompt": "--- Chat Begins ---"
+    },
+    "generationControl": {
+      "type": "normal",
+      "bias": "",
+      "dryRun": false
+    },
+    "characterContext": {
+      "name1": "Detective",
+      "name2": "Archivist",
+      "charDescription": "The Archivist preserves forgotten occult lore.",
+      "charPersonality": "Somber, knowledgeable, and guarded.",
+      "scenario": "A candlelit study inside an ancient archive.",
+      "personaDescription": "An experienced investigator."
+    },
+    "worldInfo": {
+      "worldInfoBefore": "",
+      "worldInfoAfter": ""
+    },
+    "prompts": [
+      {
+        "identifier": "main",
+        "role": "system",
+        "content": "You are the Archivist.",
+        "injection_position": "relative"
+      }
+    ],
+    "extensionPrompts": {
+      "1_memory": {
+        "value": "Summary: The iron key was found beneath the cathedral altar.",
+        "role": 0,
+        "position": 0
+      },
+      "2_floating_prompt": {
+        "value": "Style Directive: Maintain an eerie Victorian gothic prose.",
+        "role": 0,
+        "position": 1
+      }
+    },
+    "chatHistory": [
+      {
+        "role": "user",
+        "content": "Have you uncovered what the iron key unlocks?",
+        "name": "Detective"
+      },
+      {
+        "role": "assistant",
+        "content": "The registry speaks of a sealed chamber beneath the crypts.",
+        "name": "Archivist"
+      }
+    ],
+    "messageExamples": [],
+    "toolsContext": {
+      "canPerformToolCalls": false
+    },
+    "recordedTokenCounts": {
+      "authorsNote": 11,
+      "main": 5,
+      "summary": 14,
+      "charDescription": 9,
+      "charPersonality": 8,
+      "scenario": 9,
+      "personaDescription": 5,
+      "newMainChat": 5,
+      "chatHistory-1": 10,
+      "chatHistory-2": 13
+    }
+  },
+  "expectedOutput": {
+    "chat": [
+      {
+        "role": "system",
+        "content": "Style Directive: Maintain an eerie Victorian gothic prose."
+      },
+      {
+        "role": "system",
+        "content": "You are the Archivist."
+      },
+      {
+        "role": "system",
+        "content": "Summary: The iron key was found beneath the cathedral altar."
+      },
+      {
+        "role": "system",
+        "content": "The Archivist preserves forgotten occult lore."
+      },
+      {
+        "role": "system",
+        "content": "Somber, knowledgeable, and guarded."
+      },
+      {
+        "role": "system",
+        "content": "A candlelit study inside an ancient archive."
+      },
+      {
+        "role": "system",
+        "content": "An experienced investigator."
+      },
+      {
+        "role": "system",
+        "content": "--- Chat Begins ---"
+      },
+      {
+        "role": "user",
+        "content": "Have you uncovered what the iron key unlocks?",
+        "name": "Detective"
+      },
+      {
+        "role": "assistant",
+        "content": "The registry speaks of a sealed chamber beneath the crypts.",
+        "name": "Archivist"
+      }
+    ],
+    "metadata": {
+      "totalBudget": 3596,
+      "tokensUsed": 92,
+      "remainingTokens": 3504,
+      "reservedTokens": {
+        "replyPriming": 3,
+        "controlPrompts": 0,
+        "tools": 0,
+        "newChatMessage": 5
+      },
+      "droppedHistoryCount": 0,
+      "squashedCount": 0,
+      "injectedPromptsCount": 0
+    }
+  }
+}

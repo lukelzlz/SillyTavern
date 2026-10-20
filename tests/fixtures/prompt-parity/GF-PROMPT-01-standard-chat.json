@@ -1,0 +1,137 @@
+{
+  "fixtureId": "GF-PROMPT-01-standard-chat",
+  "description": "Standard single character conversation with base prompts, world info, and chat history under normal budget",
+  "recordedAt": "2026-10-20T10:00:00Z",
+  "clientVersion": "1.19.0",
+  "input": {
+    "settings": {
+      "source": "openai",
+      "model": "gpt-4o",
+      "maxContext": 4096,
+      "maxTokens": 500,
+      "squashSystemMessages": false,
+      "pinExamples": true,
+      "newChatPrompt": "--- Chat Begins ---",
+      "scenarioFormat": "[Scenario: {{scenario}}]",
+      "personalityFormat": "[Personality: {{personality}}]"
+    },
+    "generationControl": {
+      "type": "normal",
+      "bias": "",
+      "dryRun": false
+    },
+    "characterContext": {
+      "name1": "Alice",
+      "name2": "Seraphina",
+      "charDescription": "Seraphina is a master artificer of clockwork machines.",
+      "charPersonality": "Curious, meticulous, and articulate.",
+      "scenario": "The clocktower workshop on a rainy afternoon.",
+      "personaDescription": "Alice is a wandering scholar."
+    },
+    "worldInfo": {
+      "worldInfoBefore": "Eldoria is powered by arcane brass gears.",
+      "worldInfoAfter": "The Grand Regulator maintains temporal synchronization."
+    },
+    "prompts": [],
+    "extensionPrompts": {},
+    "chatHistory": [
+      {
+        "role": "user",
+        "content": "Good afternoon Seraphina. Can you inspect this chronometer?",
+        "name": "Alice"
+      },
+      {
+        "role": "assistant",
+        "content": "Ah, Alice! Let me adjust my loupe. This escapement wheel is fascinating.",
+        "name": "Seraphina"
+      },
+      {
+        "role": "user",
+        "content": "What seems to be causing the temporal slip?",
+        "name": "Alice"
+      }
+    ],
+    "messageExamples": [],
+    "toolsContext": {
+      "canPerformToolCalls": false
+    },
+    "recordedTokenCounts": {
+      "worldInfoBefore": 12,
+      "main": 6,
+      "worldInfoAfter": 11,
+      "charDescription": 12,
+      "charPersonality": 10,
+      "scenario": 11,
+      "personaDescription": 8,
+      "newMainChat": 5,
+      "chatHistory-1": 14,
+      "chatHistory-2": 16,
+      "chatHistory-3": 11
+    }
+  },
+  "expectedOutput": {
+    "chat": [
+      {
+        "role": "system",
+        "content": "Eldoria is powered by arcane brass gears."
+      },
+      {
+        "role": "system",
+        "content": "You are Seraphina."
+      },
+      {
+        "role": "system",
+        "content": "The Grand Regulator maintains temporal synchronization."
+      },
+      {
+        "role": "system",
+        "content": "Seraphina is a master artificer of clockwork machines."
+      },
+      {
+        "role": "system",
+        "content": "[Personality: Curious, meticulous, and articulate.]"
+      },
+      {
+        "role": "system",
+        "content": "[Scenario: The clocktower workshop on a rainy afternoon.]"
+      },
+      {
+        "role": "system",
+        "content": "Alice is a wandering scholar."
+      },
+      {
+        "role": "system",
+        "content": "--- Chat Begins ---"
+      },
+      {
+        "role": "user",
+        "content": "Good afternoon Seraphina. Can you inspect this chronometer?",
+        "name": "Alice"
+      },
+      {
+        "role": "assistant",
+        "content": "Ah, Alice! Let me adjust my loupe. This escapement wheel is fascinating.",
+        "name": "Seraphina"
+      },
+      {
+        "role": "user",
+        "content": "What seems to be causing the temporal slip?",
+        "name": "Alice"
+      }
+    ],
+    "metadata": {
+      "totalBudget": 3596,
+      "tokensUsed": 119,
+      "remainingTokens": 3477,
+      "reservedTokens": {
+        "replyPriming": 3,
+        "controlPrompts": 0,
+        "tools": 0,
+        "newChatMessage": 5
+      },
+      "droppedHistoryCount": 0,
+      "squashedCount": 0,
+      "injectedPromptsCount": 0
+    }
+  }
+}

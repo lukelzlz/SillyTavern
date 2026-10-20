@@ -1,0 +1,130 @@
+{
+  "fixtureId": "GF-PROMPT-06-tools-and-reasoning",
+  "description": "Validation of function tools reservation, tool call serialization, and paired tool results with reasoning signatures",
+  "recordedAt": "2026-10-20T11:15:00Z",
+  "clientVersion": "1.19.0",
+  "input": {
+    "settings": {
+      "source": "openai",
+      "model": "gpt-4o",
+      "maxContext": 4096,
+      "maxTokens": 500,
+      "squashSystemMessages": false,
+      "pinExamples": true,
+      "newChatPrompt": "--- Chat Begins ---"
+    },
+    "generationControl": {
+      "type": "normal",
+      "bias": "",
+      "dryRun": false
+    },
+    "characterContext": {
+      "name1": "User",
+      "name2": "Char"
+    },
+    "worldInfo": {
+      "worldInfoBefore": "",
+      "worldInfoAfter": ""
+    },
+    "prompts": [
+      {
+        "identifier": "main",
+        "role": "system",
+        "content": "You have database query tools."
+      }
+    ],
+    "extensionPrompts": {},
+    "chatHistory": [
+      {
+        "role": "user",
+        "content": "Please search the archives for Project Zephyr."
+      },
+      {
+        "role": "assistant",
+        "invocations": [
+          {
+            "id": "call_987",
+            "name": "query_database",
+            "parameters": "{\"query\":\"Project Zephyr\"}",
+            "result": "{\"found\":true,\"file\":\"zephyr.pdf\"}",
+            "signature": "sig_abc123"
+          }
+        ],
+        "reasoning": "The user asked for Project Zephyr, checking database.",
+        "signature": "sig_global"
+      }
+    ],
+    "messageExamples": [],
+    "toolsContext": {
+      "canPerformToolCalls": true,
+      "toolsSchema": [
+        {
+          "type": "function",
+          "function": {
+            "name": "query_database"
+          }
+        }
+      ]
+    },
+    "recordedTokenCounts": {
+      "main": 8,
+      "newMainChat": 5,
+      "toolsSchema": 20,
+      "Please search the archives for Project Zephyr.": 9,
+      "toolCall-0": 25,
+      "call_987": 12
+    }
+  },
+  "expectedOutput": {
+    "chat": [
+      {
+        "role": "system",
+        "content": "You have database query tools."
+      },
+      {
+        "role": "system",
+        "content": "--- Chat Begins ---"
+      },
+      {
+        "role": "user",
+        "content": "Please search the archives for Project Zephyr."
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_987",
+            "type": "function",
+            "function": {
+              "name": "query_database",
+              "arguments": "{\"query\":\"Project Zephyr\"}"
+            },
+            "signature": "sig_abc123"
+          }
+        ],
+        "signature": "sig_global",
+        "reasoning": "The user asked for Project Zephyr, checking database."
+      },
+      {
+        "role": "tool",
+        "content": "{\"found\":true,\"file\":\"zephyr.pdf\"}",
+        "tool_call_id": "call_987"
+      }
+    ],
+    "metadata": {
+      "totalBudget": 3596,
+      "tokensUsed": 82,
+      "remainingTokens": 3514,
+      "reservedTokens": {
+        "replyPriming": 3,
+        "controlPrompts": 0,
+        "tools": 20,
+        "newChatMessage": 5
+      },
+      "droppedHistoryCount": 0,
+      "squashedCount": 0,
+      "injectedPromptsCount": 0
+    }
+  }
+}
