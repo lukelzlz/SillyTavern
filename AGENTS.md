@@ -86,3 +86,6 @@ node server.js
 | 2026-08-19 | Hist | 角色卡导入失败 (Error importing character) 与 PNG tEXt 块解析 | `docs/sessions/SESSION-HIST-002-character-card-png-chunk-parser.md` | Accepted |
 | 2026-10-19 | Init | 初始化项目文档驱动体系与跨 Agent 历史记忆继承 | `AGENTS.md` | Accepted |
 | 2026-10-19 / PROPOSAL-001 | Spec | SillyTavern 服务端有状态核心化与前端视图投影重构 | `docs/proposals/PROPOSAL-001-server-side-headless-core.md`, `docs/decisions/ADR-001-state-mirror-and-bridge-event-bus.md` | Accepted |
+| 2026-10-20 / PROPOSAL-002 | Spec | Core WS 一次性票据握手与安全认证传输规范 | `docs/proposals/PROPOSAL-002-core-authenticated-transport.md`, `docs/decisions/ADR-002-core-ws-ticket-authentication.md` | Accepted |
+| 2026-10-20 / PROPOSAL-003 | Spec | 服务端 World Info 语义对齐与金标差分契约 | `docs/proposals/PROPOSAL-003-world-info-parity-contract.md`, `docs/decisions/ADR-003-world-info-canonical-contract.md` | Draft (Approved by Review) |
+| 2026-10-20 / PROPOSAL-004 | Spec | 服务端 Prompt 装配等价性纯数据契约与黄金差分 | `docs/proposals/PROPOSAL-004-prompt-parity-golden-contract.md`, `docs/decisions/ADR-004-prompt-parity-differential-testing.md` | Draft (Approved by Review) |
