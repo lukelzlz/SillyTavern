@@ -394,3 +394,22 @@ gemini:
 enableServerPlugins: false
 # Attempt to automatically update server plugins on startup
 enableServerPluginsAutoUpdate: true
+# -- CORE HEADLESS & TRANSPORT CONFIGURATION --
+core:
+  transport:
+    # Enable authenticated WebSocket transport for headless core (default: false)
+    enabled: false
+    # Ticket time-to-live in seconds
+    ticketTtlSeconds: 30
+    # Maximum concurrent WebSocket connections per user
+    maxConnectionsPerUser: 5
+    # Maximum total concurrent WebSocket connections
+    maxTotalConnections: 100
+    # Ticket rate limit per user/IP
+    rateLimitPoints: 10
+    # Ticket rate limit window duration in seconds (default: 60)
+    rateLimitDurationSeconds: 60
+    # Whitelisted trusted origins for WebSocket upgrade (empty requires matching configured host/port)
+    trustedOrigins: []
+    # Allow missing Origin header during upgrade (default: false, strict CSWSH fail-closed protection)
+    allowMissingOrigin: false

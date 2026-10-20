@@ -64,6 +64,24 @@ export class CoreAuthServerFixture {
         }
         // Speed up startup in tests by skipping unnecessary content copy
         configContent = configContent.replace(/skipContentCheck:\s*false/, 'skipContentCheck: true');
+
+        // Configure Core transport settings according to PROPOSAL-002
+        if (/core:\s*\n\s*transport:/.test(configContent)) {
+            configContent = configContent.replace(/(core:\s*\n\s*transport:\s*\n[\s\S]*?enabled:\s*)(false|true)/, '$1true');
+            configContent = configContent.replace(/(ticketTtlSeconds:\s*)\d+/, '$12');
+            configContent = configContent.replace(/(maxConnectionsPerUser:\s*)\d+/, '$15');
+        } else {
+            configContent += `
+core:
+  transport:
+    enabled: true
+    ticketTtlSeconds: 2
+    maxConnectionsPerUser: 5
+    maxTotalConnections: 100
+    rateLimitPoints: 10
+    trustedOrigins: []
+`;
+        }
         fs.writeFileSync(this.configPath, configContent, 'utf8');
 
         this.port = await getFreePort();
@@ -248,6 +266,151 @@ export class CoreAuthServerFixture {
     }
 
     /**
+     * Helper to request an authenticated ticket from POST /api/core/auth/ticket
+     * @param {string} [cookie]
+     * @param {string} [csrfToken]
+     * @returns {Promise<Response>}
+     */
+    async requestTicket(cookie, csrfToken) {
+        const headers = { 'Content-Type': 'application/json' };
+        if (csrfToken !== undefined) {
+            headers['x-csrf-token'] = csrfToken;
+        }
+        if (cookie !== undefined) {
+            headers.cookie = cookie;
+        }
+        return fetch(`${this.baseUrl}/api/core/auth/ticket`, {
+            method: 'POST',
+            headers,
+        });
+    }
+
+    /**
+     * Helper to initiate a WebSocket upgrade connection to /api/bridge/ws
+     * @param {object} [options]
+     * @param {string} [options.ticket]
+     * @param {string|string[]} [options.protocols]
+     * @param {string} [options.origin]
+     * @param {string} [options.query]
+     * @param {Record<string, string>} [options.headers]
+     * @param {number} [options.timeout=5000]
+     * @returns {Promise<{ ws: import('ws').WebSocket | null, status: number, protocol: string | null, error: Error | null }>}
+     */
+    async connectWs({ ticket, protocols, origin, query, headers = {}, timeout = 5000 } = {}) {
+        const WebSocketModule = (await import('ws')).default;
+        const url = `${this.wsUrl}/api/bridge/ws${query ? `?${query}` : ''}`;
+
+        let subprotocols;
+        if (protocols !== undefined) {
+            subprotocols = protocols;
+        } else if (ticket !== undefined) {
+            subprotocols = ['st-core.v1', `ticket.${ticket}`];
+        }
+
+        const reqHeaders = { ...headers };
+        if (origin !== undefined) {
+            if (origin !== null) {
+                reqHeaders.Origin = origin;
+            }
+        }
+
+        return new Promise((resolve) => {
+            let settled = false;
+            let timer = null;
+
+            const cleanup = () => {
+                if (timer) {
+                    clearTimeout(timer);
+                    timer = null;
+                }
+            };
+
+            timer = setTimeout(() => {
+                if (!settled) {
+                    settled = true;
+                    try {
+                        ws?.terminate();
+                    } catch (e) {
+                        // Ignore termination error
+                    }
+                    resolve({
+                        ws: null,
+                        status: 0,
+                        protocol: null,
+                        error: new Error(`WebSocket connection timed out after ${timeout}ms`),
+                    });
+                }
+            }, timeout);
+
+            let ws;
+            try {
+                ws = new WebSocketModule(url, subprotocols, { headers: reqHeaders });
+            } catch (err) {
+                cleanup();
+                return resolve({ ws: null, status: 0, protocol: null, error: err });
+            }
+
+            ws.on('unexpected-response', (req, res) => {
+                if (!settled) {
+                    settled = true;
+                    cleanup();
+                    resolve({
+                        ws: null,
+                        status: res.statusCode,
+                        protocol: null,
+                        error: null,
+                    });
+                }
+            });
+
+            ws.on('open', () => {
+                if (!settled) {
+                    settled = true;
+                    cleanup();
+                    resolve({
+                        ws,
+                        status: 101,
+                        protocol: ws.protocol,
+                        error: null,
+                    });
+                }
+            });
+
+            ws.on('error', (err) => {
+                if (!settled) {
+                    settled = true;
+                    cleanup();
+                    resolve({
+                        ws: null,
+                        status: 0,
+                        protocol: null,
+                        error: err,
+                    });
+                }
+            });
+        });
+    }
+
+    /**
+     * Admin disables a user account via POST /api/users/disable
+     * @param {{ cookie: string }} adminAuth
+     * @param {string} handle
+     * @returns {Promise<Response>}
+     */
+    async disableUser(adminAuth, handle) {
+        const ctx = await this.getSessionContext(adminAuth.cookie);
+        return fetch(`${this.baseUrl}/api/users/disable`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-csrf-token': ctx.csrfToken,
+                cookie: adminAuth.cookie,
+            },
+            body: JSON.stringify({ handle }),
+        });
+    }
+
+    /**
      * Stops the real server.js child process and removes all temporary files.
      */
     async stop() {
@@ -292,4 +455,61 @@ export class CoreAuthServerFixture {
             this.tempDir = null;
         }
     }
+}
+
+/**
+ * Waits for a message on a WebSocket connection
+ * @param {import('ws').WebSocket} ws
+ * @param {number} [timeoutMs=3000]
+ * @returns {Promise<any>}
+ */
+export function waitForWsMessage(ws, timeoutMs = 3000) {
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            reject(new Error(`Timed out waiting for WebSocket message after ${timeoutMs}ms`));
+        }, timeoutMs);
+
+        ws.once('message', (data) => {
+            clearTimeout(timer);
+            try {
+                resolve(JSON.parse(data.toString()));
+            } catch {
+                resolve(data.toString());
+            }
+        });
+        ws.once('error', (err) => {
+            clearTimeout(timer);
+            reject(err);
+        });
+        ws.once('close', (code) => {
+            clearTimeout(timer);
+            reject(new Error(`WebSocket closed (code: ${code}) before message received`));
+        });
+    });
+}
+
+/**
+ * Waits for WebSocket connection to close (for logout/revocation assertions)
+ * @param {import('ws').WebSocket} ws
+ * @param {number} [timeoutMs=3000]
+ * @returns {Promise<{ code: number, reason: string }>}
+ */
+export function waitForWsClose(ws, timeoutMs = 3000) {
+    return new Promise((resolve, reject) => {
+        if (!ws || ws.readyState === 2 || ws.readyState === 3) {
+            return resolve({ code: ws?.closeCode ?? 1000, reason: ws?.closeReason ?? '' });
+        }
+        const timer = setTimeout(() => {
+            reject(new Error(`WebSocket did not close within ${timeoutMs}ms (current readyState: ${ws.readyState})`));
+        }, timeoutMs);
+
+        ws.once('close', (code, reason) => {
+            clearTimeout(timer);
+            resolve({ code, reason: reason ? reason.toString() : '' });
+        });
+        ws.once('error', (err) => {
+            clearTimeout(timer);
+            reject(err);
+        });
+    });
 }

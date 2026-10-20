@@ -1,4 +1,4 @@
-import { eventSource } from '../../script.js';
+import { eventSource, token } from '../../script.js';
 
 /**
  * BridgeClient handles WebSocket connection to the server Headless Core,
@@ -27,13 +27,39 @@ export class BridgeClient {
         return `${protocol}//${window.location.host}/api/bridge/ws`;
     }
 
-    connect() {
+    async connect() {
         if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
             return;
         }
 
         try {
-            this.ws = new WebSocket(this.getWsUrl());
+            // Request short-lived single-use ticket via protected HTTP POST
+            const headers = { 'Content-Type': 'application/json' };
+            if (token) {
+                headers['X-CSRF-Token'] = token;
+            }
+
+            const ticketRes = await fetch('/api/core/auth/ticket', {
+                method: 'POST',
+                headers,
+            });
+
+            if (!ticketRes.ok) {
+                // If core transport is disabled or unauthenticated, halt and fallback to native route
+                this.isConnected = false;
+                this.scheduleReconnect();
+                return;
+            }
+
+            const ticketData = await ticketRes.json();
+            if (!ticketData.ok || !ticketData.ticket) {
+                this.isConnected = false;
+                this.scheduleReconnect();
+                return;
+            }
+
+            // Connect using Sec-WebSocket-Protocol (st-core.v1, ticket.<ticket>)
+            this.ws = new WebSocket(this.getWsUrl(), ['st-core.v1', `ticket.${ticketData.ticket}`]);
 
             this.ws.onopen = () => {
                 console.log('[Core Bridge] Connected to SillyTavern Headless Core');
@@ -45,8 +71,13 @@ export class BridgeClient {
                 this.handleMessage(event.data);
             };
 
-            this.ws.onclose = () => {
+            this.ws.onclose = (event) => {
                 this.isConnected = false;
+                // If closed due to Session Revoked (4001), do not attempt reconnection
+                if (event.code === 4001) {
+                    console.warn('[Core Bridge] WebSocket connection revoked; halting reconnection.');
+                    return;
+                }
                 this.scheduleReconnect();
             };
 

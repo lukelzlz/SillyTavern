@@ -1,12 +1,64 @@
 import { WebSocketServer } from 'ws';
-import { randomUUID } from 'node:crypto';
+import crypto, { randomUUID } from 'node:crypto';
 import sessionEngine from './session-engine.js';
 import WorldInfoEngine from './world-info-engine.js';
 import PromptEngine from './prompt-engine.js';
+import ticketManager from './ticket-manager.js';
+import { getConfigValue } from '../util.js';
+import storage from 'node-persist';
+
+const KEY_PREFIX = 'user:';
+function toKey(handle) {
+    return `${KEY_PREFIX}${handle}`;
+}
+
+function getAccountVersion(user) {
+    if (!user) return '';
+    return crypto.createHash('shake256', { outputLength: 8 })
+        .update(JSON.stringify([user.handle, user.password, user.salt]))
+        .digest('hex');
+}
+
+/**
+ * Safe configuration reader that falls back gracefully when CLI args are not initialized.
+ * @param {string} key
+ * @param {any} defaultValue
+ * @param {'boolean'|'number'|null} [typeConverter]
+ * @returns {any}
+ */
+function getCoreConfig(key, defaultValue, typeConverter = null) {
+    const envKey = 'SILLYTAVERN_' + String(key).toUpperCase().replace(/\./g, '_');
+    if (envKey in process.env) {
+        const val = process.env[envKey];
+        if (typeConverter === 'boolean') {
+            return String(val).toLowerCase() === 'true';
+        }
+        if (typeConverter === 'number') {
+            const num = parseFloat(val);
+            return isNaN(num) ? defaultValue : num;
+        }
+        return val;
+    }
+    if (!globalThis.COMMAND_LINE_ARGS) {
+        return defaultValue;
+    }
+    return getConfigValue(key, defaultValue, typeConverter);
+}
 
 export class WebSocketBridge {
     constructor() {
-        this.wss = new WebSocketServer({ noServer: true });
+        this.wss = new WebSocketServer({
+            noServer: true,
+            handleProtocols: (protocols, _req) => {
+                if (protocols.has('st-core.v1')) {
+                    return 'st-core.v1';
+                }
+                if (protocols.has('st-ticket')) {
+                    return 'st-ticket';
+                }
+                return 'st-core.v1';
+            },
+        });
         /** @type {Map<string, Set<import('ws').WebSocket>>} userId -> Set<WebSocket> */
         this.userClients = new Map();
         /** @type {Map<string, { resolve: Function, timer: NodeJS.Timeout }>} interceptId -> resolver */
@@ -17,9 +69,8 @@ export class WebSocketBridge {
     }
 
     #setupWss() {
-        this.wss.on('connection', (ws, request) => {
-            // Default user association (can be expanded via auth tokens/cookies)
-            const userId = 'default';
+        this.wss.on('connection', (ws, _request, { userHandle } = {}) => {
+            const userId = userHandle || 'default';
             ws.userId = userId;
             ws.isAlive = true;
 
@@ -34,7 +85,15 @@ export class WebSocketBridge {
                 ws.isAlive = true;
             });
 
-            ws.on('message', (data) => {
+            ws.on('message', async (data) => {
+                // Fail-closed verification: check if user still valid before handling message
+                if (userId !== 'default') {
+                    const valid = await this.#verifyUserValid(userId);
+                    if (!valid) {
+                        this.terminateUserConnections(userId, 4001, 'Session Revoked');
+                        return;
+                    }
+                }
                 this.#handleMessage(ws, data);
             });
 
@@ -48,22 +107,31 @@ export class WebSocketBridge {
                 }
             });
 
-            // Send initial handshake
+            // Send initial handshake frame bound to authenticated user
             ws.send(JSON.stringify({
                 type: 'handshake',
-                status: 'connected',
+                status: 'authenticated',
                 userId,
                 summary: sessionEngine.getSession(userId).getSummary(),
             }));
         });
 
-        // Periodic heartbeat
-        this.heartbeatTimer = setInterval(() => {
+        // Periodic heartbeat & fail-closed account verification
+        this.heartbeatTimer = setInterval(async () => {
             for (const client of this.wss.clients) {
                 if (!client.isAlive) {
                     client.terminate();
                     continue;
                 }
+
+                if (client.userId && client.userId !== 'default') {
+                    const valid = await this.#verifyUserValid(client.userId);
+                    if (!valid) {
+                        this.terminateUserConnections(client.userId, 4001, 'Session Revoked');
+                        continue;
+                    }
+                }
+
                 client.isAlive = false;
                 client.ping();
             }
@@ -75,29 +143,225 @@ export class WebSocketBridge {
 
     #bindSessionEngine() {
         // Forward session events to all connected clients for that user
-        sessionEngine.on('message:appended', ({ message, index, version }) => {
-            this.broadcastEvent('default', 'MESSAGE_RECEIVED', { message, index, version });
+        sessionEngine.on('message:appended', (payload) => {
+            const userId = payload?.userId || 'default';
+            this.broadcastEvent(userId, 'MESSAGE_RECEIVED', payload);
         });
     }
 
     /**
-     * Attach WebSocket upgrade handler to an HTTP/HTTPS server instance.
+     * Checks if the given Origin header is trusted.
+     * Enforces fixed configuration and avoids Host header reflection.
+     * @param {string} origin
+     * @param {import('http').Server | import('https').Server} server
+     * @returns {boolean}
+     */
+    #isOriginAllowed(origin, server) {
+        if (!origin || typeof origin !== 'string') {
+            return false;
+        }
+
+        try {
+            // 1. Explicitly configured trustedOrigins whitelist
+            const trustedOrigins = getCoreConfig('core.transport.trustedOrigins', [], null) || [];
+            if (Array.isArray(trustedOrigins) && trustedOrigins.includes(origin)) {
+                return true;
+            }
+
+            const originUrl = new URL(origin);
+
+            // 2. Resolve fixed server bound port
+            let serverPort = null;
+            if (server && typeof server.address === 'function') {
+                const addr = server.address();
+                if (addr && typeof addr === 'object') {
+                    serverPort = addr.port;
+                }
+            }
+            if (!serverPort) {
+                serverPort = getCoreConfig('port', 8000, 'number');
+            }
+
+            const originPort = originUrl.port ? Number(originUrl.port) : (originUrl.protocol === 'https:' ? 443 : 80);
+
+            // 3. Local loopback addresses matching server port
+            const isLocalHost = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(originUrl.hostname);
+            if (isLocalHost && originPort === Number(serverPort)) {
+                return true;
+            }
+
+            // 4. Fixed configured listen address (NOT reflecting Host header)
+            const configuredIpv4 = getCoreConfig('listenAddress.ipv4', null);
+            if (configuredIpv4 && configuredIpv4 !== '0.0.0.0' && originUrl.hostname === configuredIpv4 && originPort === Number(serverPort)) {
+                return true;
+            }
+
+            return false;
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * Verifies that the user still exists, is enabled, and account version matches.
+     * @param {string} userHandle
+     * @param {string} [expectedVersion]
+     * @returns {Promise<boolean>}
+     */
+    async #verifyUserValid(userHandle, expectedVersion) {
+        if (userHandle === 'default') {
+            return true;
+        }
+
+        try {
+            if (typeof storage.getItem !== 'function') {
+                return true;
+            }
+            const user = await storage.getItem(toKey(userHandle));
+            if (!user || user.enabled === false) {
+                return false;
+            }
+            if (expectedVersion && typeof getAccountVersion === 'function') {
+                if (getAccountVersion(user) !== expectedVersion) {
+                    return false;
+                }
+            }
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * Attach authenticated WebSocket upgrade handler to an HTTP/HTTPS server instance.
      * @param {import('http').Server | import('https').Server} server
      */
     attachServer(server) {
-        server.on('upgrade', (request, socket) => {
+        server.on('upgrade', async (request, socket, head) => {
             try {
-                const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
+                const hostHeader = request.headers.host || 'localhost';
+                const url = new URL(request.url, `http://${hostHeader}`);
                 const cleanPath = url.pathname.replace(/\/+$/, '') || '/';
-                if (cleanPath === '/api/bridge/ws') {
-                    // P0 Security: Unauthenticated Core WS upgrade is disabled by default.
-                    socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Type: text/plain\r\n\r\nForbidden: Core WebSocket Bridge upgrade is disabled.\r\n');
-                    socket.destroy();
+                if (cleanPath !== '/api/bridge/ws') {
+                    // Not our path, allow other upgrade handlers to process it
+                    return;
                 }
-            } catch {
-                // Ignore parse failures to avoid interfering with other upgrade handlers
+
+                // Helper to reject upgrade with standard HTTP response and close socket
+                const rejectUpgrade = (statusCode, statusText, bodyMessage) => {
+                    if (socket.writable) {
+                        socket.write(
+                            'HTTP/1.1 ' + statusCode + ' ' + statusText + '\r\n' +
+                            'Connection: close\r\n' +
+                            'Content-Type: text/plain\r\n' +
+                            'Content-Length: ' + Buffer.byteLength(bodyMessage) + '\r\n\r\n' +
+                            bodyMessage,
+                        );
+                    }
+                    socket.destroy();
+                };
+
+                // 1. Feature Flag Guard (Default Closed)
+                const isEnabled = getCoreConfig('core.transport.enabled', false, 'boolean');
+                if (!isEnabled) {
+                    return rejectUpgrade(403, 'Forbidden', 'Forbidden: Core WebSocket Bridge upgrade is disabled.\r\n');
+                }
+
+                // 2. Reject Query String Parameter Probe / Spoofing (CWE-598)
+                if (url.searchParams.has('ticket') || url.searchParams.has('userId') || url.searchParams.has('token') || url.search) {
+                    return rejectUpgrade(403, 'Forbidden', 'Forbidden: Query parameter authentication is forbidden.\r\n');
+                }
+
+                // 3. Strict Origin Verification ("固定配置 Origin 规则，不反射 Host")
+                const origin = request.headers.origin;
+                const allowMissingOrigin = getCoreConfig('core.transport.allowMissingOrigin', false, 'boolean');
+
+                if (!origin) {
+                    if (!allowMissingOrigin) {
+                        return rejectUpgrade(403, 'Forbidden', 'Forbidden: Missing Origin header.\r\n');
+                    }
+                } else if (!this.#isOriginAllowed(origin, server)) {
+                    return rejectUpgrade(403, 'Forbidden', 'Forbidden: Origin is not trusted.\r\n');
+                }
+
+                // 4. Subprotocol negotiation & Ticket extraction
+                const subprotocolsHeader = request.headers['sec-websocket-protocol'];
+                if (!subprotocolsHeader) {
+                    return rejectUpgrade(403, 'Forbidden', 'Forbidden: Missing Sec-WebSocket-Protocol authentication header.\r\n');
+                }
+
+                const protocols = subprotocolsHeader.split(',').map(s => s.trim());
+                let ticketToken = null;
+                for (const proto of protocols) {
+                    if (proto.startsWith('ticket.')) {
+                        ticketToken = proto.slice('ticket.'.length);
+                        break;
+                    } else if (proto.startsWith('st-ticket.')) {
+                        ticketToken = proto.slice('st-ticket.'.length);
+                        break;
+                    }
+                }
+
+                if (!ticketToken) {
+                    return rejectUpgrade(403, 'Forbidden', 'Forbidden: Invalid or missing ticket in Sec-WebSocket-Protocol header.\r\n');
+                }
+
+                // 5. Consume ticket atomically (prevents replay)
+                const ticketData = ticketManager.consumeTicket(ticketToken);
+                if (!ticketData) {
+                    return rejectUpgrade(403, 'Forbidden', 'Forbidden: Invalid or expired ticket.\r\n');
+                }
+
+                const userHandle = ticketData.userHandle;
+
+                // 6. Account Status Verification
+                const userValid = await this.#verifyUserValid(userHandle, ticketData.accountVersion);
+                if (!userValid) {
+                    return rejectUpgrade(403, 'Forbidden', 'Forbidden: User account revoked or invalid.\r\n');
+                }
+
+                // 7. Capacity & Rate Limit Guard
+                const maxTotal = getCoreConfig('core.transport.maxTotalConnections', 100, 'number');
+                if (this.wss.clients.size >= maxTotal) {
+                    return rejectUpgrade(429, 'Too Many Requests', 'Too Many Requests: Server WebSocket capacity reached.\r\n');
+                }
+
+                const maxPerUser = getCoreConfig('core.transport.maxConnectionsPerUser', 5, 'number');
+                const existingUserClients = this.userClients.get(userHandle);
+                if (existingUserClients && existingUserClients.size >= maxPerUser) {
+                    return rejectUpgrade(429, 'Too Many Requests', 'Too Many Requests: Per-user WebSocket connection limit reached.\r\n');
+                }
+
+                // 8. Complete WebSocket Upgrade (echos only st-core.v1)
+                this.wss.handleUpgrade(request, socket, head, (ws) => {
+                    this.wss.emit('connection', ws, request, { userHandle });
+                });
+            } catch (err) {
+                console.error('[WS Bridge] Upgrade error:', err);
+                socket.destroy();
             }
         });
+    }
+
+    /**
+     * Actively terminates all active WebSocket connections for a user and revokes their pending tickets.
+     * @param {string} userHandle
+     * @param {number} [code=4001]
+     * @param {string} [reason='Session Revoked']
+     */
+    terminateUserConnections(userHandle, code = 4001, reason = 'Session Revoked') {
+        const clients = this.userClients.get(userHandle);
+        if (clients) {
+            for (const ws of clients) {
+                try {
+                    ws.close(code, reason);
+                } catch {
+                    // Ignore
+                }
+            }
+            this.userClients.delete(userHandle);
+        }
+        ticketManager.revokeUserTickets(userHandle);
     }
 
     #handleMessage(ws, rawData) {
@@ -242,6 +506,15 @@ export class WebSocketBridge {
             clearInterval(this.heartbeatTimer);
             this.heartbeatTimer = null;
         }
+        for (const client of this.wss.clients) {
+            try {
+                client.terminate();
+            } catch {
+                // Ignore
+            }
+        }
+        this.userClients.clear();
+        this.pendingInterceptions.clear();
         this.wss.close();
     }
 }

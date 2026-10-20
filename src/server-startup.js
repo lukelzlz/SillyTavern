@@ -140,9 +140,38 @@ export function redirectDeprecatedEndpoints(app) {
  * @param {import('express').Express} app The Express app to use
  */
 export function setupPrivateEndpoints(app) {
+    // Revocation & termination hook for Core WebSocket Bridge on logout, password change, user disable/delete
+    app.use('/api/users', (request, response, next) => {
+        const originalHandle = request.user?.profile?.handle || request.session?.handle;
+
+        response.on('finish', () => {
+            if (response.statusCode >= 200 && response.statusCode < 300) {
+                const subPath = request.path.replace(/^\/admin/, '');
+                if (subPath === '/logout') {
+                    if (originalHandle) {
+                        wsBridge.terminateUserConnections(originalHandle, 4001, 'Session Revoked');
+                    }
+                } else if (subPath === '/change-password') {
+                    const targetHandle = request.body?.handle || originalHandle;
+                    if (targetHandle) {
+                        wsBridge.terminateUserConnections(targetHandle, 4001, 'Password Changed');
+                    }
+                } else if (subPath === '/disable' || subPath === '/delete') {
+                    const targetHandle = request.body?.handle;
+                    if (targetHandle) {
+                        wsBridge.terminateUserConnections(targetHandle, 4001, 'Account Disabled');
+                    }
+                }
+            }
+        });
+
+        next();
+    });
+
     app.use('/', userDataRouter);
     app.use('/api/users', usersPrivateRouter);
     app.use('/api/users', usersAdminRouter);
+    app.use('/api/users/admin', usersAdminRouter);
     app.use('/api/moving-ui', movingUIRouter);
     app.use('/api/images', imagesRouter);
     app.use('/api/quick-replies', quickRepliesRouter);
