@@ -29,6 +29,9 @@ status: tested
 13. 新增 authenticated Core WS `server_context` 真实生成链路测试，验证 WebSocket → JobManager → PromptAssembler → gateway → generation:completed 全链路。
 14. 新增 authenticated Core WS `server_context` + plugin interception 回归测试，验证拦截握手不会重复注入 canonical World Info 的 before、Author's Note、outlet 槽位，也不会把 stale browser 槽位带入 gateway。
 15. 新增真实浏览器 E2E `CorePromptHandoff.e2e.js`，验证 `prepareOpenAIMessages()` 在 server-owned 模式跳过浏览器最终组装，在不安全上下文与显式 client-owned 模式下各只执行一次本地 hook，并验证 Core transport 失败时 HTTP fallback 清理全部 Core 专用字段。
+16. 修复 `BridgeClient` 生成流的重连竞态：初始 `followGeneration()` 在 WS 尚未完成 authenticated handshake 时失败，不再因为 handshake 先完成而错过后续 catch-up；流初始化后会补发一次受共享 promise 去重保护的 `generate:reconnect`。
+17. WS 断开时主动以 `CORE_BRIDGE_UNAVAILABLE` 拒绝挂起的 generation/RPC 请求，确保 `openai.js` 能走既定 HTTP rollback，而不会把瞬时断线误报为不可降级的未知异常。
+18. 新增 authenticated WebSocket 断线追帧集成回归：生成首帧后关闭原连接，服务端继续生成并完成，新连接使用 `lastSeq` 追回缺失 chunk；新增浏览器 E2E 覆盖初始 reconnect race 的完整文本去重与终态收敛。
 
 ## 验证记录
 
@@ -50,8 +53,10 @@ status: tested
 - 本轮 browser prompt ownership/fallback 增量：`npm run lint` 通过；`npx eslint frontend/CorePromptHandoff.e2e.js` 通过；启动本地服务后 `npx playwright test frontend/CorePromptHandoff.e2e.js --config=playwright.config.js` 通过，1 test；首次 E2E 暴露 `core_prompt_interception` 未在 HTTP fallback 清理的问题，已修复并复测通过。
 - 本轮针对性单测：`cd tests && npm run test:unit -- core-bridge.test.js generation-orchestrator.test.js prompt-parity.test.js --runInBand` 通过，3 suites / 97 tests。
 - 本轮完整回归：`cd tests && npm run test:unit` 通过，28 suites / 597 tests。
+- 本轮 generation reconnect/catch-up 增量：目标 ESLint 无 error；`cd tests && npm run test:unit -- generation-orchestrator.test.js --runInBand` 通过，54 tests；启动本地服务后 `npx playwright test frontend/CorePromptHandoff.e2e.js --config=playwright.config.js` 通过，2 tests。
+- 本轮完整检查：`npm run lint` 通过；`cd tests && npm run test:unit` 通过，28 suites / 598 tests。
 
 ## 未完成与下一阶段
 
 - 本阶段的 browser/server 完整 World Info slot differential fixture、真实 Core WS `server_context` interception 无重复注入验证，以及浏览器 `prepareOpenAIMessages()` ownership/fallback 路径均已完成。
-- 下一阶段应继续沿 Core prompt handoff 主线接入真实 authenticated Core WS 浏览器链路，验证 capability 开启后的服务端生成、插件拦截与 HTTP rollback，再推进生成中断线重连与 catch-up。
+- 下一阶段继续沿 Core prompt handoff 主线补齐真实浏览器 authenticated Core WS 生成链路（当前已完成协议级 authenticated WS 与浏览器恢复竞态回归），重点推进 capability 开启时浏览器实际发起 `sendStreamingRequest()` 的端到端服务端生成/插件拦截；随后再处理生成中断后的 UI 状态恢复与多标签同步验收。

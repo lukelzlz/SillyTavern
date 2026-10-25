@@ -1791,6 +1791,82 @@ describe('Generation Orchestrator & Server Job Manager Test Suite', () => {
             jobManager.jobs.delete(aliceJob.id);
         });
 
+        test('replays missed generation chunks after an authenticated WebSocket reconnect', async () => {
+            const { jobManager } = await import('../src/core/generation/job-manager.js');
+            const previousHandler = jobManager.generateHandler;
+            let releaseSecondChunk;
+            const secondChunkReleased = new Promise((resolve) => {
+                releaseSecondChunk = resolve;
+            });
+
+            jobManager.generateHandler = async (_req, res) => {
+                res.write('data: {"choices":[{"delta":{"content":"first"}}]}\n\n');
+                await secondChunkReleased;
+                res.write('data: {"choices":[{"delta":{"content":" second"}}]}\n\n');
+                res.end();
+            };
+
+            try {
+                const requestId = 'authenticated-reconnect-catchup-request';
+                const createdPromise = waitForMessage(
+                    aliceWs,
+                    (message) => message.type === 'job:created' && message.requestId === requestId,
+                );
+                const firstTokenPromise = waitForMessage(
+                    aliceWs,
+                    (message) => message.type === 'event' && message.event === 'generation:token',
+                );
+
+                aliceWs.send(JSON.stringify({
+                    type: 'generate:start',
+                    id: requestId,
+                    payload: {
+                        messages: [{ role: 'user', content: 'reconnect me' }],
+                        stream: true,
+                        chat_completion_source: 'openai',
+                        model: 'test-model',
+                    },
+                }));
+
+                const created = await createdPromise;
+                const firstToken = await firstTokenPromise;
+                expect(firstToken.data.fullText).toBe('first');
+
+                const disconnected = aliceWs;
+                const closedPromise = new Promise((resolve) => disconnected.once('close', resolve));
+                disconnected.close();
+                await closedPromise;
+
+                aliceWs = await connectUser('alice');
+                const completedPromise = waitForMessage(
+                    aliceWs,
+                    (message) => message.type === 'event'
+                        && message.event === 'generation:completed'
+                        && message.data?.jobId === created.jobId,
+                );
+                releaseSecondChunk();
+                await completedPromise;
+
+                aliceWs.send(JSON.stringify({
+                    type: 'generate:reconnect',
+                    id: 'authenticated-reconnect-catchup-replay',
+                    payload: { jobId: created.jobId, lastSeq: 1 },
+                }));
+                const catchup = await waitForMessage(
+                    aliceWs,
+                    (message) => message.type === 'job:catchup'
+                        && message.requestId === 'authenticated-reconnect-catchup-replay',
+                );
+
+                expect(catchup.status).toBe(JOB_STATUS.COMPLETED);
+                expect(catchup.chunks.map((chunk) => chunk.delta)).toEqual([' second']);
+                expect(catchup.fullText).toBe('first second');
+            } finally {
+                releaseSecondChunk();
+                jobManager.generateHandler = previousHandler;
+            }
+        });
+
         test('rejects WebSocket generation start when the orchestrator is disabled', async () => {
             process.env.SILLYTAVERN_CORE_GENERATION_ORCHESTRATORENABLED = 'false';
             bobWs.send(JSON.stringify({ type: 'generate:start', payload: {} }));

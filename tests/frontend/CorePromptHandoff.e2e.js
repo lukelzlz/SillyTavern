@@ -187,4 +187,50 @@ test.describe('Core prompt handoff ownership', () => {
         expect(result.fallbackTransport.fetchBody).not.toHaveProperty('core_prompt_interception');
         expect(result.fallbackTransport.fetchBody).not.toHaveProperty('core_prompt_ready_handled');
     });
+
+    test('generation stream retries catch-up when handshake wins the initial reconnect race', async ({ page }) => {
+        const result = await page.evaluate(async () => {
+            const { BridgeClient } = await import('/scripts/core/bridge-client.js');
+            const client = new BridgeClient();
+            client.connect = async () => { };
+            client.isReady = true;
+
+            const reconnectCalls = [];
+            let reconnectAttempt = 0;
+            client.getGenerationJob = async () => ({
+                job: {
+                    status: 'STREAMING',
+                    fullText: 'A',
+                    lastSeq: 1,
+                },
+            });
+            client.reconnectGeneration = async (_jobId, lastSeq) => {
+                reconnectCalls.push(lastSeq);
+                if (reconnectAttempt++ === 0) {
+                    throw new Error('simulated reconnect race');
+                }
+                return {
+                    status: 'COMPLETED',
+                    hasMissedChunks: true,
+                    fullText: 'AB',
+                    lastSeq: 2,
+                    chunks: [],
+                };
+            };
+
+            const stream = client.followGeneration('job-race', { timeoutMs: 1000 });
+            const items = [];
+            for await (const item of stream) {
+                items.push({ event: item.event, fullText: item.data?.fullText });
+            }
+
+            return { reconnectCalls, items };
+        });
+
+        expect(result.reconnectCalls).toEqual([0, 1]);
+        expect(result.items).toEqual([
+            { event: 'generation:token', fullText: 'A' },
+            { event: 'generation:token', fullText: 'AB' },
+        ]);
+    });
 });

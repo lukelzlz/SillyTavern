@@ -146,9 +146,20 @@ export class BridgeClient {
                 }
                 for (const pending of this.pendingJobRequests.values()) {
                     clearTimeout(pending.timer);
-                    pending.reject(new Error('[Core Bridge] WebSocket disconnected during generation operation'));
+                    pending.reject(createBridgeError(
+                        '[Core Bridge] WebSocket disconnected during generation operation',
+                        'CORE_BRIDGE_UNAVAILABLE',
+                    ));
                 }
                 this.pendingJobRequests.clear();
+                for (const pending of this.pendingRpc.values()) {
+                    clearTimeout(pending.timer);
+                    pending.reject(createBridgeError(
+                        '[Core Bridge] WebSocket disconnected during RPC operation',
+                        'CORE_BRIDGE_UNAVAILABLE',
+                    ));
+                }
+                this.pendingRpc.clear();
                 // If closed due to Session Revoked (4001), do not attempt reconnection
                 if (event.code === 4001) {
                     console.warn('[Core Bridge] WebSocket connection revoked; halting reconnection.');
@@ -813,13 +824,14 @@ export class BridgeClient {
             }
         };
 
-        this.generationListeners.set(jobId, {
+        const listener = {
             enqueue,
             getLastSeq: () => state.lastSeq,
             isInitialized: () => state.initialized,
             timeoutMs,
             recoveryPromise: null,
-        });
+        };
+        this.generationListeners.set(jobId, listener);
 
         const waitForEvent = () => {
             if (state.queue.length > 0) {
@@ -921,7 +933,11 @@ export class BridgeClient {
             try {
                 const snapshot = await client.getGenerationJob(jobId, 0);
                 const job = snapshot?.job;
-                const catchup = await client.reconnectGeneration(jobId, 0, timeoutMs).catch(() => null);
+                let recoveryNeeded = false;
+                const catchup = await client.reconnectGeneration(jobId, 0, timeoutMs).catch(() => {
+                    recoveryNeeded = true;
+                    return null;
+                });
                 if (catchup) {
                     for (const item of replayCatchup(catchup)) {
                         yield item;
@@ -944,6 +960,9 @@ export class BridgeClient {
                 }
 
                 state.initialized = true;
+                if (recoveryNeeded && client.isReady) {
+                    client.recoverGenerationListener(jobId, listener);
+                }
 
                 if (job?.status === 'COMPLETED') {
                     state.terminal = true;
@@ -1052,19 +1071,34 @@ export class BridgeClient {
 
         const recoveries = [];
         for (const [jobId, listener] of this.generationListeners.entries()) {
-            if (!listener.isInitialized() || listener.recoveryPromise) {
-                continue;
+            const recovery = this.recoverGenerationListener(jobId, listener);
+            if (recovery) {
+                recoveries.push(recovery);
             }
-
-            const recovery = this.reconnectGeneration(jobId, listener.getLastSeq(), listener.timeoutMs)
-                .then((catchup) => listener.enqueue('generation:catchup', catchup))
-                .catch((error) => listener.enqueue('generation:reconnect_error', { error: error.message }));
-            listener.recoveryPromise = recovery.finally(() => {
-                listener.recoveryPromise = null;
-            });
-            recoveries.push(listener.recoveryPromise);
         }
         await Promise.all(recoveries);
+    }
+
+    /**
+     * Requests catch-up for one initialized generation stream. Returning the
+     * shared promise prevents the handshake and initial stream setup race from
+     * issuing duplicate reconnect operations.
+     * @param {string} jobId
+     * @param {object} listener
+     * @returns {Promise<void>|null}
+     */
+    recoverGenerationListener(jobId, listener = this.generationListeners.get(jobId)) {
+        if (!this.isReady || !listener?.isInitialized() || listener.recoveryPromise) {
+            return null;
+        }
+
+        const recovery = this.reconnectGeneration(jobId, listener.getLastSeq(), listener.timeoutMs)
+            .then((catchup) => listener.enqueue('generation:catchup', catchup))
+            .catch((error) => listener.enqueue('generation:reconnect_error', { error: error.message }));
+        listener.recoveryPromise = recovery.finally(() => {
+            listener.recoveryPromise = null;
+        });
+        return listener.recoveryPromise;
     }
 
     /**
