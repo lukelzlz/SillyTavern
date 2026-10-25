@@ -18,10 +18,21 @@ export class BridgeClient {
         /** @type {Map<string, { resolve: Function, reject: Function, timer: NodeJS.Timeout }>} */
         this.pendingJobRequests = new Map();
 
-        /** @type {{ chat: any[], chatMetadata: Record<string, unknown>, version: number, onSync?: Function, snapshotMeta: object, serverInitialized: boolean }|null} */
+        /** @type {number} Number of server-originated events currently being projected. */
+        this.remoteEventDepth = 0;
+
+        /** @type {{ chat: any[], chatMetadata: Record<string, unknown>, version: number, onSync?: Function, snapshotMeta: object, serverInitialized: boolean, dirty: boolean }|null} */
         this.stateBinding = null;
 
         this.init();
+    }
+
+    /**
+     * True while a server-originated event is being projected into the local UI.
+     * Local lifecycle listeners use this to avoid echoing remote state back to the server.
+     */
+    get isApplyingRemoteEvent() {
+        return this.remoteEventDepth > 0;
     }
 
     init() {
@@ -72,9 +83,11 @@ export class BridgeClient {
                 this.isConnected = true;
                 this.reconnectAttempts = 0;
                 if (this.stateBinding) {
-                    const syncPromise = this.stateBinding.serverInitialized
-                        ? this.refreshBoundState()
-                        : this.bootstrapBoundState();
+                    const syncPromise = this.stateBinding.dirty
+                        ? this.syncBoundState()
+                        : this.stateBinding.serverInitialized
+                            ? this.refreshBoundState()
+                            : this.bootstrapBoundState();
                     syncPromise.catch((error) => {
                         console.warn('[Core Bridge] Failed to refresh bound state:', error);
                     });
@@ -161,7 +174,12 @@ export class BridgeClient {
                 await this.applyStateEvent(event, data);
                 if (eventSource && typeof eventSource.emit === 'function') {
                     // Transparently trigger local event listeners
-                    await eventSource.emit(event, data);
+                    this.remoteEventDepth++;
+                    try {
+                        await eventSource.emit(event, data);
+                    } finally {
+                        this.remoteEventDepth--;
+                    }
                 }
                 return;
             }
@@ -217,6 +235,7 @@ export class BridgeClient {
             onSync,
             snapshotMeta: { characterId, characterName, chatId },
             serverInitialized: !bootstrap,
+            dirty: false,
         };
 
         if (this.isConnected) {
@@ -289,6 +308,7 @@ export class BridgeClient {
 
         binding.version = Number.isInteger(version) ? version : Number(snapshot.version) || binding.version;
         binding.serverInitialized = true;
+        binding.dirty = false;
         if (typeof binding.onSync === 'function') {
             binding.onSync({ type: 'snapshot', version: binding.version });
         }
@@ -349,6 +369,7 @@ export class BridgeClient {
 
         binding.version = Number.isInteger(version) ? version : binding.version + 1;
         binding.serverInitialized = true;
+        binding.dirty = false;
         if (typeof binding.onSync === 'function') {
             binding.onSync({ type: 'patch', operation: patch.op, version: binding.version });
         }
@@ -388,8 +409,47 @@ export class BridgeClient {
 
         binding.version = Number(result.version) || binding.version;
         binding.serverInitialized = true;
+        binding.dirty = false;
         if (typeof binding.onSync === 'function') {
             binding.onSync({ type: 'bootstrap', version: binding.version });
+        }
+    }
+
+    /**
+     * Marks the locally bound state as changed while disconnected or while a
+     * debounced sync is pending.
+     */
+    markBoundStateDirty() {
+        if (this.stateBinding) {
+            this.stateBinding.dirty = true;
+        }
+    }
+
+    /**
+     * Pushes the currently bound local state to the server without replacing
+     * object identities used by the existing UI and extensions.
+     */
+    async syncBoundState() {
+        const binding = this.stateBinding;
+        if (!binding || !this.isConnected || this.isApplyingRemoteEvent) {
+            return;
+        }
+
+        const result = await this.syncFullState({
+            ...binding.snapshotMeta,
+            chat: binding.chat,
+            metadata: binding.chatMetadata,
+        });
+
+        if (!result?.success) {
+            throw new Error(result?.error || '[Core Bridge] Failed to sync bound state');
+        }
+
+        binding.version = Number(result.version) || binding.version;
+        binding.serverInitialized = true;
+        binding.dirty = false;
+        if (typeof binding.onSync === 'function') {
+            binding.onSync({ type: 'sync', version: binding.version });
         }
     }
 

@@ -132,6 +132,7 @@ async function bindCurrentCoreState(options = {}) {
 }
 
 let coreLifecycleSyncInstalled = false;
+let pendingCoreStateSync = null;
 
 function installCoreLifecycleSync() {
     if (coreLifecycleSyncInstalled) {
@@ -147,6 +148,43 @@ function installCoreLifecycleSync() {
 
     for (const event of [event_types.APP_READY, event_types.CHAT_LOADED, event_types.CHAT_CHANGED]) {
         eventSource.on(event, sync);
+    }
+
+    const localMutationEvents = [
+        event_types.MESSAGE_RECEIVED,
+        event_types.MESSAGE_EDITED,
+        event_types.MESSAGE_DELETED,
+        event_types.MESSAGE_UPDATED,
+        event_types.MESSAGE_SWIPED,
+        event_types.MESSAGE_REASONING_EDITED,
+        event_types.MESSAGE_REASONING_DELETED,
+        event_types.MESSAGE_SWIPE_DELETED,
+    ];
+
+    const markLocalStateChanged = () => {
+        if (coreBridge.isApplyingRemoteEvent) {
+            return;
+        }
+
+        coreBridge.markBoundStateDirty();
+        if (!coreBridge.isConnected) {
+            return;
+        }
+
+        if (pendingCoreStateSync) {
+            clearTimeout(pendingCoreStateSync);
+        }
+
+        pendingCoreStateSync = setTimeout(() => {
+            pendingCoreStateSync = null;
+            coreBridge.syncBoundState().catch((error) => {
+                console.warn('[Core Bridge] Failed to sync local chat mutation:', error);
+            });
+        }, 50);
+    };
+
+    for (const event of localMutationEvents) {
+        eventSource.on(event, markLocalStateChanged);
     }
 }
 

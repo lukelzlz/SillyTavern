@@ -6,6 +6,7 @@ import PromptEngine from './prompt-engine.js';
 import ticketManager from './ticket-manager.js';
 import { getConfigValue } from '../util.js';
 import storage from 'node-persist';
+import { getUserDirectories } from '../users.js';
 
 const KEY_PREFIX = 'user:';
 function toKey(handle) {
@@ -418,6 +419,17 @@ export class WebSocketBridge {
                     const job = await jobManager.createJob({
                         userId: ws.userId,
                         body: msg.payload || {},
+                        req: {
+                            user: {
+                                profile: {
+                                    handle: ws.userId,
+                                    enabled: true,
+                                },
+                                directories: getUserDirectories(ws.userId),
+                            },
+                            headers: {},
+                            session: {},
+                        },
                     });
                     ws.send(JSON.stringify({
                         type: 'job:created',
