@@ -6,6 +6,7 @@ import { SyntheticResponse, createSyntheticRequest } from './synthetic-response.
 import defaultSessionEngine from '../session-engine.js';
 import defaultWsBridge from '../ws-bridge.js';
 import { PromptAssembler } from '../prompt/prompt-assembler.js';
+import { validateCorePromptContext } from '../prompt/context-schema.js';
 import { createPromptTokenizer, DualTrackTokenizer } from '../prompt/tokenizer-adapter.js';
 import { getConfigFilePath, getConfigValue, setConfigFilePath } from '../../util.js';
 
@@ -237,6 +238,13 @@ export class JobManager extends EventEmitter {
 
         if (mode === 'server_context' && !hasContext) {
             throw invalidGenerationRequest('server_context prompt mode requires core_prompt_context.');
+        }
+
+        if (mode === 'server_context') {
+            const validation = validateCorePromptContext(body.core_prompt_context);
+            if (!validation.valid) {
+                throw invalidGenerationRequest(`Invalid core_prompt_context: ${validation.issues.join('; ')}`);
+            }
         }
 
         if (mode === 'client_final' && hasContext) {

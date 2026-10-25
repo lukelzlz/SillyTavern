@@ -569,6 +569,40 @@ describe('Generation Orchestrator & Server Job Manager Test Suite', () => {
             });
         });
 
+        test('Rejects malformed server prompt contexts before creating a job', async () => {
+            jobManager = new JobManager({
+                generateHandler: async () => {},
+                sessionEngine: mockSessionEngine,
+                wsBridge: mockWsBridge,
+            });
+
+            await expect(jobManager.createJob({
+                userId: 'alice',
+                body: {
+                    core_prompt_mode: 'server_context',
+                    core_prompt_context: {
+                        schemaVersion: 1,
+                        settings: {},
+                        generationControl: { type: 'normal' },
+                        characterContext: {},
+                        worldInfo: {},
+                        promptOrder: [],
+                        prompts: [],
+                        extensionPrompts: {},
+                        chatHistory: [{ role: 'user', content: 123 }],
+                        messageExamples: [],
+                        toolsContext: {},
+                        recordedTokenCounts: {},
+                    },
+                },
+            })).rejects.toMatchObject({
+                name: 'InvalidGenerationRequestError',
+                status: 400,
+                message: expect.stringContaining('chatHistory[0].content'),
+            });
+            expect(jobManager.jobs.size).toBe(0);
+        });
+
         test('Does not settle a completed job into a different active chat', async () => {
             const gateway = async (_req, res) => {
                 res.send({ choices: [{ message: { content: 'chat A response' } }] });

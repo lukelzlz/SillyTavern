@@ -7,6 +7,7 @@ import {
     DualTrackTokenizer,
     PromptDiffAsserter,
     createPromptTokenizer,
+    validateCorePromptContext,
 } from '../src/core/prompt/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -154,6 +155,55 @@ describe('Prompt Parity Phase 1: 8 Golden Fixture Differential Tests', () => {
 });
 
 describe('Prompt Parity: Dual-Track Tokenizer & Fail-Closed Guardrails', () => {
+    test('Canonical server context accepts a browser-shaped prompt envelope', () => {
+        const fixture = loadFixture('GF-PROMPT-01-standard-chat.json');
+        const context = {
+            schemaVersion: 1,
+            settings: fixture.input.settings,
+            generationControl: fixture.input.generationControl,
+            characterContext: fixture.input.characterContext,
+            worldInfo: fixture.input.worldInfo,
+            promptOrder: ['main', 'charDescription', 'chatHistory'],
+            prompts: fixture.input.prompts,
+            extensionPrompts: fixture.input.extensionPrompts,
+            chatHistory: fixture.input.chatHistory,
+            messageExamples: fixture.input.messageExamples,
+            toolsContext: fixture.input.toolsContext,
+            recordedTokenCounts: fixture.input.recordedTokenCounts,
+        };
+
+        expect(validateCorePromptContext(context)).toEqual({ valid: true, issues: [] });
+    });
+
+    test('Canonical server context rejects malformed fields with actionable paths', () => {
+        const result = validateCorePromptContext({
+            schemaVersion: 2,
+            settings: { maxContext: -1 },
+            generationControl: { type: 'unsupported' },
+            characterContext: {},
+            worldInfo: {},
+            promptOrder: [null],
+            prompts: [{ identifier: '' }],
+            extensionPrompts: {},
+            chatHistory: [{ role: 'invalid', content: 42 }],
+            messageExamples: [[]],
+            toolsContext: {},
+            recordedTokenCounts: { bad: -1 },
+        });
+
+        expect(result.valid).toBe(false);
+        expect(result.issues).toEqual(expect.arrayContaining([
+            'schemaVersion: must equal 1',
+            'settings.maxContext: must be a positive finite number when provided',
+            'generationControl.type: must be one of normal, continue, impersonate, or quiet',
+            'promptOrder[0]: must be a non-empty string',
+            'prompts[0].identifier: must be a non-empty string',
+            'chatHistory[0].role: must be one of system, user, assistant, or tool',
+            'chatHistory[0].content: must be a string, array, null, or undefined',
+            'recordedTokenCounts.bad: must be a non-negative integer',
+        ]));
+    });
+
     test('Track A: Returns recorded token count when present', () => {
         const tokenizer = new DualTrackTokenizer({
             recordedTokenCounts: {
