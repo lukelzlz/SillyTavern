@@ -1,4 +1,34 @@
 import crypto from 'node:crypto';
+import { getTokenizerModel, getTiktokenTokenizer } from '../../endpoints/tokenizers.js';
+
+/**
+ * Creates the production tokenizer used by the first server-context handoff
+ * slice. It deliberately supports only the OpenAI text path for now; other
+ * provider dialects retain the fail-closed behavior until their exact prompt
+ * tokenization contract is wired in.
+ *
+ * @param {{ source?: string, model?: string }} [options]
+ * @returns {{ count: (item: object|string) => number }|null}
+ */
+export function createPromptTokenizer({ source = '', model = '' } = {}) {
+    if (source !== 'openai') {
+        return null;
+    }
+
+    const tokenizerModel = getTokenizerModel(String(model || ''));
+    const encoder = getTiktokenTokenizer(tokenizerModel);
+
+    return {
+        count(item) {
+            const text = typeof item === 'string'
+                ? item
+                : Array.isArray(item?.content)
+                    ? JSON.stringify(item.content)
+                    : String(item?.content ?? '');
+            return encoder.encode(text).length;
+        },
+    };
+}
 
 /**
  * Dual-track tokenizer adapter.
@@ -11,7 +41,7 @@ export class DualTrackTokenizer {
     /**
      * @param {object} [options]
      * @param {Record<string, number>} [options.recordedTokenCounts]
-     * @param {{ countAsync?: Function, count?: Function }} [options.tokenizer]
+     * @param {{ countAsync?: Function, count?: Function }|null} [options.tokenizer]
      */
     constructor({ recordedTokenCounts = {}, tokenizer = null } = {}) {
         this.recordedTokenCounts = recordedTokenCounts || {};

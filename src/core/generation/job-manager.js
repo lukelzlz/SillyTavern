@@ -6,6 +6,7 @@ import { SyntheticResponse, createSyntheticRequest } from './synthetic-response.
 import defaultSessionEngine from '../session-engine.js';
 import defaultWsBridge from '../ws-bridge.js';
 import { PromptAssembler } from '../prompt/prompt-assembler.js';
+import { createPromptTokenizer, DualTrackTokenizer } from '../prompt/tokenizer-adapter.js';
 import { getConfigFilePath, getConfigValue, setConfigFilePath } from '../../util.js';
 
 let defaultGenerateHandlerPromise = null;
@@ -598,7 +599,13 @@ export class JobManager extends EventEmitter {
             return;
         }
 
-        const assembled = await PromptAssembler.assemble(context);
+        const productionTokenizer = createPromptTokenizer({
+            source: context.settings?.source,
+            model: context.settings?.model,
+        });
+        const assembled = await PromptAssembler.assemble(context, productionTokenizer
+            ? { tokenizer: new DualTrackTokenizer({ tokenizer: productionTokenizer }) }
+            : {});
         if (!Array.isArray(assembled?.chat)) {
             throw new Error('Server prompt assembly did not return a chat message array.');
         }

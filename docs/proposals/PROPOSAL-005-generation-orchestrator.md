@@ -255,6 +255,10 @@ implementationBranch: feat/generation-orchestrator
    skips its local `CHAT_COMPLETION_PROMPT_READY` emission and the server owns
    the one interception round-trip. If the optional Core transport cannot be
    used, the browser restores the native hook before falling back to HTTP.
+   For OpenAI text handoff requests, the server now supplies the existing
+   model-specific tiktoken adapter as a fallback when a browser-recorded
+   segment count is absent; unsupported provider dialects remain fail-closed
+   until their exact tokenizer contract is added.
 2. **主动中止 (`generate:abort`)**:
    ```json
    {

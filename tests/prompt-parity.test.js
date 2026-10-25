@@ -6,6 +6,7 @@ import {
     PromptAssembler,
     DualTrackTokenizer,
     PromptDiffAsserter,
+    createPromptTokenizer,
 } from '../src/core/prompt/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -178,6 +179,22 @@ describe('Prompt Parity: Dual-Track Tokenizer & Fail-Closed Guardrails', () => {
         });
         expect(() => tokenizer.countSync({ role: 'user', content: 'unrecorded content' }, 'unknown-id'))
             .toThrow(/\[DualTrackTokenizer\] Fail-Closed: No recorded token count found/);
+    });
+
+    test('Production OpenAI tokenizer adapter supplies an exact model encoder', async () => {
+        const fixture = loadFixture('GF-PROMPT-01-standard-chat.json');
+        const input = structuredClone(fixture.input);
+        delete input.recordedTokenCounts;
+
+        const productionTokenizer = createPromptTokenizer({ source: 'openai', model: 'gpt-4o' });
+        expect(productionTokenizer).not.toBeNull();
+
+        const output = await PromptAssembler.assemble(input, {
+            tokenizer: new DualTrackTokenizer({ tokenizer: productionTokenizer }),
+        });
+
+        expect(output.chat.length).toBeGreaterThan(0);
+        expect(output.metadata.tokensUsed).toBeGreaterThan(0);
     });
 });
 
