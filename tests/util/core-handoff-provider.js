@@ -2,8 +2,11 @@ import http from 'node:http';
 
 const port = Number(process.env.ST_CORE_PROVIDER_PORT || 8124);
 let blocked = false;
-let releaseBlockedRequest = null;
+const pendingResponses = new Set();
 let lastRequest = null;
+let closedResponses = 0;
+let requestCount = 0;
+let scenario = { mode: 'markers', pauseAfterFirst: false };
 
 function readBody(req) {
     return new Promise((resolve, reject) => {
@@ -22,12 +25,17 @@ function sendJson(res, value) {
     res.end(JSON.stringify(value));
 }
 
-async function waitUntilReleased() {
+async function waitUntilReleased(res) {
     if (!blocked) return;
     await new Promise((resolve) => {
-        releaseBlockedRequest = resolve;
+        const release = () => {
+            pendingResponses.delete(release);
+            res.off('close', release);
+            resolve();
+        };
+        pendingResponses.add(release);
+        res.once('close', release);
     });
-    releaseBlockedRequest = null;
 }
 
 const server = http.createServer(async (req, res) => {
@@ -41,7 +49,16 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'GET' && req.url === '/health') {
-        sendJson(res, { ok: true, blocked });
+        sendJson(res, { ok: true, blocked, pending: pendingResponses.size, closedResponses, requestCount });
+        return;
+    }
+
+    if (req.method === 'POST' && req.url === '/control/scenario') {
+        scenario = JSON.parse(await readBody(req));
+        requestCount = 0;
+        lastRequest = null;
+        blocked = Boolean(scenario.pauseAfterFirst);
+        sendJson(res, { ok: true });
         return;
     }
 
@@ -53,7 +70,7 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && req.url === '/control/release') {
         blocked = false;
-        releaseBlockedRequest?.();
+        for (const release of pendingResponses) release();
         sendJson(res, { ok: true, blocked });
         return;
     }
@@ -70,10 +87,21 @@ const server = http.createServer(async (req, res) => {
     }
 
     try {
-        lastRequest = JSON.parse(await readBody(req));
-        await waitUntilReleased();
+        const request = JSON.parse(await readBody(req));
+        lastRequest = request;
+        requestCount++;
+        const current = { ...scenario };
+        res.once('close', () => { closedResponses++; });
+        if (!current.pauseAfterFirst) await waitUntilReleased(res);
+        if (res.destroyed) return;
 
-        const messages = Array.isArray(lastRequest?.messages) ? lastRequest.messages : [];
+        if (current.mode === 'http-error') {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: { message: 'Controlled provider failure' } }));
+            return;
+        }
+
+        const messages = Array.isArray(request?.messages) ? request.messages : [];
         const content = messages.map(message => String(message?.content || '')).join('\n');
         const markerCount = (content.match(/CORE_PROVIDER_MARKER/g) || []).length;
         const worldInfoCount = (content.match(/CORE_PROVIDER_WORLD_INFO/g) || []).length;
@@ -84,7 +112,18 @@ const server = http.createServer(async (req, res) => {
             'Cache-Control': 'no-cache',
             Connection: 'keep-alive',
         });
-        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: `provider:${markerCount}:${worldInfoCount}` } }] })}\n\n`);
+        const first = current.mode === 'markers' ? `provider:${markerCount}:${worldInfoCount}` : 'A controlled reply';
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: first } }] })}\n\n`);
+        if (current.pauseAfterFirst) await waitUntilReleased(res);
+        if (res.destroyed) return;
+        if (current.mode === 'stream-error') {
+            res.write(`data: ${JSON.stringify({ error: { message: 'Controlled stream failure' } })}\n\n`);
+            res.end();
+            return;
+        }
+        if (current.mode === 'success') {
+            res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: ' completes exactly once.' } }] })}\n\n`);
+        }
         res.write('data: [DONE]\n\n');
         res.end();
     } catch (error) {
@@ -94,11 +133,14 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(port, '127.0.0.1', () => {
-    process.stdout.write(`Core handoff provider listening on ${port}\n`);
+    const actualPort = server.address().port;
+    process.send?.({ port: actualPort });
+    process.stdout.write(`Core handoff provider listening on ${actualPort}\n`);
 });
 
 function shutdown() {
-    releaseBlockedRequest?.();
+    for (const release of pendingResponses) release();
+    server.closeAllConnections();
     server.close(() => process.exit(0));
 }
 

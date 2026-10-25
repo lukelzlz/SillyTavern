@@ -3842,14 +3842,14 @@ class StreamingProcessor {
         playMessageSound();
     }
 
-    onErrorStreaming() {
+    onErrorStreaming({ notifyReceived = true, unlockUI = true } = {}) {
         this.abortController.abort();
         this.isStopped = true;
 
-        this.markUIGenStopped();
+        if (unlockUI) this.markUIGenStopped();
 
         const noEmitTypes = ['swipe', 'impersonate', 'continue'];
-        if (!noEmitTypes.includes(this.type)) {
+        if (notifyReceived && !noEmitTypes.includes(this.type)) {
             eventSource.emit(event_types.MESSAGE_RECEIVED, this.messageId, this.type);
             eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, this.messageId, this.type);
         }
@@ -3918,7 +3918,13 @@ class StreamingProcessor {
                 this.images = state?.images ?? [];
                 this.reasoningSignature = state?.signature ?? null;
                 await eventSource.emit(event_types.STREAM_TOKEN_RECEIVED, text);
-                await sw.tick(async () => await this.onProgressStreaming(this.messageId, this.continueMessage + text));
+                // A fast first token must not remain hidden behind the placeholder
+                // while the provider pauses. Throttle only subsequent updates.
+                if (timestamps.length === 1) {
+                    await this.onProgressStreaming(this.messageId, this.continueMessage + text);
+                } else {
+                    await sw.tick(async () => await this.onProgressStreaming(this.messageId, this.continueMessage + text));
+                }
             }
             const seconds = (timestamps[timestamps.length - 1] - timestamps[0]) / 1000;
             console.warn(`Stream stats: ${timestamps.length} tokens, ${seconds.toFixed(2)} seconds, rate: ${Number(timestamps.length / seconds).toFixed(2)} TPS`);
@@ -3926,7 +3932,20 @@ class StreamingProcessor {
             // in the case of a self-inflicted abort, we have already cleaned up
             if (!this.isFinished) {
                 console.error(err);
-                this.onErrorStreaming();
+                const coreFailed = err?.code === 'CORE_GENERATION_FAILED' && this.coreGenerationJobId;
+                this.onErrorStreaming({ notifyReceived: !coreFailed, unlockUI: !coreFailed });
+                if (coreFailed) {
+                    // The server rolls failures back rather than settling partial
+                    // replies. Remove only this stream's local placeholder too.
+                    try {
+                        const index = chat.findLastIndex(message => message.extra?.core_generation_job_id === this.coreGenerationJobId);
+                        if (index >= 0) chat.splice(index, 1);
+                        await redisplayChat();
+                        await saveChatConditional();
+                    } finally {
+                        this.markUIGenStopped();
+                    }
+                }
             }
             return this.result;
         }
@@ -5503,6 +5522,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                     'fromStream': { value: true },
                 });
             }
+            streamingProcessor = null;
         } else {
             return await sendGenerationRequest(type, generate_data, { jsonSchema, corePromptContext, corePromptMode });
         }

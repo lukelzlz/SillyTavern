@@ -1,16 +1,31 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../util/core-handoff-fixture.js';
 import { testSetup } from './frontent-test-utils.js';
 
 test.use({ channel: 'chromium' });
 
+async function finishOnboarding(page) {
+    const welcome = page.locator('dialog[open]').filter({ hasText: 'Welcome to SillyTavern!' });
+    if (await welcome.count()) {
+        await welcome.locator('.popup-button-ok').click();
+        await expect(welcome).toHaveCount(0);
+    }
+}
+
+async function abortTestJob(page, jobId) {
+    if (jobId && !page.isClosed()) {
+        await page.evaluate(id => window.coreBridge.abortGeneration(id), jobId).catch(() => {});
+    }
+}
+
 test.describe('Real Core prompt handoff transport', () => {
     test.beforeEach(async ({ page }) => {
         await testSetup.awaitST({ page });
+        await finishOnboarding(page);
         await page.waitForFunction(() => window.coreBridge?.isReady === true);
     });
 
-    test('sends browser context through authenticated Core WS and server prompt assembly', async ({ page }) => {
-        const result = await page.evaluate(async () => {
+    test('sends browser context through authenticated Core WS and server prompt assembly', async ({ page, handoff }) => {
+        const result = await page.evaluate(async (providerUrl) => {
             const script = await import('/script.js');
             const openai = await import('/scripts/openai.js');
             const { getStringHash } = await import('/scripts/utils.js');
@@ -22,7 +37,7 @@ test.describe('Real Core prompt handoff transport', () => {
             openai.oai_settings.n = 1;
             openai.oai_settings.show_thoughts = false;
             openai.oai_settings.openai_model = 'core-handoff-e2e';
-            openai.oai_settings.reverse_proxy = 'http://127.0.0.1:8124/v1';
+            openai.oai_settings.reverse_proxy = `${providerUrl}/v1`;
             openai.oai_settings.proxy_password = 'test-provider-key';
             openai.oai_settings.chat_completion_source = openai.chat_completion_sources.OPENAI;
             getContext().accountStorage.setItem(
@@ -75,7 +90,7 @@ test.describe('Real Core prompt handoff transport', () => {
                     chunks.push(chunk.text);
                 }
 
-                const providerRequest = await fetch('http://127.0.0.1:8124/control/last-request').then(response => response.json());
+                const providerRequest = await fetch(`${providerUrl}/control/last-request`).then(response => response.json());
 
                 return {
                     mode,
@@ -86,7 +101,7 @@ test.describe('Real Core prompt handoff transport', () => {
             } finally {
                 eventSource.removeListener(event_types.CHAT_COMPLETION_PROMPT_READY, interceptionListener);
             }
-        });
+        }, handoff.providerUrl);
 
         expect(result.capabilities).toMatchObject({
             orchestrator: true,
@@ -105,8 +120,8 @@ test.describe('Real Core prompt handoff transport', () => {
         ]));
     });
 
-    test('stops a response-gated Core job without disabling the network', async ({ page }) => {
-        const result = await page.evaluate(async () => {
+    test('stops a response-gated Core job without disabling the network', async ({ page, handoff }) => {
+        const result = await page.evaluate(async (providerUrl) => {
             const script = await import('/script.js');
             const openai = await import('/scripts/openai.js');
             const { getStringHash } = await import('/scripts/utils.js');
@@ -117,7 +132,7 @@ test.describe('Real Core prompt handoff transport', () => {
             openai.oai_settings.n = 1;
             openai.oai_settings.show_thoughts = false;
             openai.oai_settings.openai_model = 'core-handoff-stop-e2e';
-            openai.oai_settings.reverse_proxy = 'http://127.0.0.1:8124/v1';
+            openai.oai_settings.reverse_proxy = `${providerUrl}/v1`;
             openai.oai_settings.proxy_password = 'test-provider-key';
             openai.oai_settings.chat_completion_source = openai.chat_completion_sources.OPENAI;
             getContext().accountStorage.setItem(
@@ -125,7 +140,7 @@ test.describe('Real Core prompt handoff transport', () => {
                 'true',
             );
 
-            await fetch('http://127.0.0.1:8124/control/block', { method: 'POST' });
+            await fetch(`${providerUrl}/control/block`, { method: 'POST' });
 
             const [, , context, mode] = await openai.prepareOpenAIMessages({
                 name1: 'Alice',
@@ -167,22 +182,95 @@ test.describe('Real Core prompt handoff transport', () => {
 
             const jobId = window.coreBridge.activeGenerationJob?.jobId || null;
             const stopped = script.stopGeneration();
-            await fetch('http://127.0.0.1:8124/control/release', { method: 'POST' });
+            // Do not race HTTP gate release against the fire-and-forget WS abort.
+            await window.coreBridge.activeGenerationAbortPromise;
+            const stoppedJob = await window.coreBridge.getGenerationJob(jobId);
+            await fetch(`${providerUrl}/control/release`, { method: 'POST' });
             await streamPromise;
 
             return {
                 mode,
                 jobId,
                 stopped,
+                status: stoppedJob.job.status,
                 streamError,
                 activeGenerationJob: window.coreBridge.activeGenerationJob,
             };
-        });
+        }, handoff.providerUrl);
 
         expect(result.mode).toBe('server_context');
         expect(result.jobId).toEqual(expect.any(String));
         expect(result.stopped).toBe(true);
+        expect(result.status).toBe('ABORTED');
         expect(result.streamError).toMatch(/aborted|closed|clicked stop button/i);
         expect(result.activeGenerationJob).toBeNull();
+    });
+
+    test('a refreshed second tab stops the authenticated job and both tabs return to idle', async ({ page, context, request, handoff }) => {
+        const observer = await context.newPage();
+        const bindProjection = async (target) => {
+            await finishOnboarding(target);
+            await target.waitForFunction(() => window.coreBridge?.isReady === true);
+            await target.evaluate(async () => {
+                const { getContext } = await import('/scripts/st-context.js');
+                await getContext().bindCoreState({ bootstrap: false });
+            });
+        };
+        await testSetup.awaitST({ page: observer });
+        await bindProjection(page);
+        await bindProjection(observer);
+        await request.post(`${handoff.providerUrl}/control/block`);
+        let jobId;
+        try {
+            jobId = await page.evaluate(async (providerUrl) => {
+                const { jobId, stream } = await window.coreBridge.startGenerationStream({
+                    core_prompt_mode: 'client_final',
+                    messages: [{ role: 'user', content: 'Wait for another tab to stop this task.' }],
+                    chat_completion_source: 'openai',
+                    model: 'gpt-4o',
+                    stream: true,
+                    reverse_proxy: `${providerUrl}/v1`,
+                    proxy_password: 'test-only',
+                });
+                window.testJobResult = (async () => {
+                    try {
+                        const chunks = [];
+                        for await (const item of stream) chunks.push(item.data.fullText);
+                        return { chunks };
+                    } catch (error) {
+                        return { error: error.message };
+                    }
+                })();
+                return jobId;
+            }, handoff.providerUrl);
+            await expect.poll(async () => (await (await request.get(`${handoff.providerUrl}/health`)).json()).pending).toBe(1);
+            await expect(observer.locator('body')).toHaveAttribute('data-generating', 'true');
+            await observer.reload();
+            await observer.waitForFunction(() => !document.getElementById('preloader'));
+            await bindProjection(observer);
+
+            const restored = await observer.evaluate(() => ({
+                job: window.coreBridge.activeGenerationJob,
+                streaming: window.SillyTavern.getContext().streamingProcessor !== null,
+            }));
+            expect(restored.job).toMatchObject({ id: jobId, jobId, status: 'STREAMING' });
+            expect(restored.streaming).toBe(false);
+            await expect(observer.locator('#mes_stop')).toBeVisible();
+            await observer.locator('#mes_stop').click();
+
+            await expect.poll(async () => (await page.evaluate(id => window.coreBridge.getGenerationJob(id), jobId)).job.status).toBe('ABORTED');
+            await expect.poll(async () => (await (await request.get(`${handoff.providerUrl}/health`)).json()).pending).toBe(0);
+            await expect(page.locator('body')).not.toHaveAttribute('data-generating', 'true');
+            await expect(observer.locator('body')).not.toHaveAttribute('data-generating', 'true');
+            await expect.poll(() => page.evaluate(() => window.coreBridge.activeGenerationJob)).toBeNull();
+            await expect.poll(() => observer.evaluate(() => window.coreBridge.activeGenerationJob)).toBeNull();
+            await expect(page.locator('#mes_stop')).toBeHidden();
+            await expect(observer.locator('#mes_stop')).toBeHidden();
+            expect(await page.evaluate(() => window.testJobResult)).toEqual({ error: 'Clicked stop button' });
+        } finally {
+            await abortTestJob(page, jobId);
+            await request.post(`${handoff.providerUrl}/control/release`).catch(() => {});
+            await observer.close().catch(() => {});
+        }
     });
 });

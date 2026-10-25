@@ -64,9 +64,29 @@ status: tested
 - 本轮 generation state projection 增量：`npm run lint` 通过；`cd tests && npm run test:unit -- core-bridge.test.js generation-orchestrator.test.js --runInBand` 通过，2 suites / 65 tests；启动本地服务后 `npm --prefix tests run test:e2e -- frontend/CorePromptHandoff.e2e.js --config=playwright.config.js --workers=1` 通过，3 tests；随后 `cd tests && npm run test:unit` 完整回归通过，28 suites / 598 tests。
 - 本轮真实 Core handoff 与远端停止增量：`npm run lint` 通过；`cd tests && npm run test:unit -- prompt-parity.test.js core-bridge.test.js generation-orchestrator.test.js --runInBand` 通过，3 suites / 99 tests；使用独立 Chromium（Playwright `channel: chromium`，未复用用户浏览器）、mock provider response gate 与 Core-enabled server 配置运行 `npm --prefix tests run test:e2e -- --config=playwright.core-handoff.config.js --workers=1`，2 tests 通过；默认配置下 `npm --prefix tests run test:e2e -- frontend/CorePromptHandoff.e2e.js --config=playwright.config.js --workers=1`，5 tests 通过。
 
+## 后续阶段增量
+
+### 2026-10-25 隔离浏览器夹具增量
+
+- 在 `fix/core-refreshed-tab-stop` 隔离工作区承接已有未提交测试改动，主工作区不变。
+- `core-handoff-fixture.js` 复用真实认证服务夹具，使用临时 config/dataRoot、动态端口、独立 headless Chromium；服务端显式禁止自动打开浏览器。
+- mock provider 的响应等待随连接关闭释放，夹具退出时清理服务端及 provider 子进程，并为 provider 退出增加强制终止兜底。
+- 原有真实 handoff 两项 E2E 通过；根目录 Lint 通过，测试文件 ESLint 无 error。
+- 认证回归首次出现首帧握手超时：原测试在 `connectWs()` 返回后才监听消息，可能漏过同一事件循环的握手。夹具改为在 `open` 回调内先注册握手 promise，调用方等待该 promise，保持原握手检查的 2000ms 超时而非加长等待。
+- 夹具最终复测：`npm --prefix tests run test:unit -- core-auth-regression.test.js --runInBand`，37 tests 通过；`npm --prefix tests run test:e2e -- --config=playwright.core-handoff.config.js --grep "sends browser context|stops a response-gated" --workers=1`，2 tests 通过。
+- 刷新标签页 Stop 的失败复现保留在工作区，将与生产修复同一提交交付；本夹具增量不宣称该问题已解决。
+
+### 2026-10-25 刷新标签页 Stop 闭环
+
+- handshake 的 job 快照使用 `id`，实时事件和 UI 使用 `jobId`；现已在 BridgeClient 握手边界统一标识，保留快照元数据，在 ready 和 reconnect recovery 前完成初始化。
+- 新增 23 项行为单测；真实双标签 E2E 验证第二页刷新后能点击 Stop，将同一任务停止为 `ABORTED`，上游请求随 abort 关闭，两页恢复 idle 并清除 active job。
+- 最终检查：根目录及修改测试文件 Lint 通过；针对性单测 5 suites / 159 tests；完整单测 29 suites / 622 tests；真实 handoff E2E 3 tests；默认配置浏览器 E2E 5 tests，均通过。
+- 本地隔离服务启动及 HTTP 健康检查通过，状态为 `[Deployed 本地服务联调完成]`，不是用户验收通过。修复与测试均在 `fix/core-refreshed-tab-stop` 分支，未合入主工作区、未推送。
+- 详细失败历史、复现命令及验证边界见 `docs/sessions/SESSION-20261025-refreshed-tab-stop-blocker.md`。
+
 ## 未完成与下一阶段
 
 - 本阶段的 browser/server 完整 World Info slot differential fixture、真实 Core WS `server_context` interception 无重复注入验证，以及浏览器 `prepareOpenAIMessages()` ownership/fallback 路径均已完成。
 - 上一轮已补齐多标签生成状态投影的第一步；本轮在此基础上完成了远端标签页 Stop 与 capability 开启时的真实 Core WS server-context streaming 验收。
-- 本轮已完成 capability 开启时浏览器真实 Core WS server-context streaming、服务端 World Info/插件 interception、response-gated 远端停止与 UI stream 收敛；仍未完成完整的双浏览器页面共享 active job 刷新接管，以及 provider 失败后的真实浏览器跨标签页错误 UI 验收。
-- 下一阶段继续沿 Core prompt handoff 主线补齐真实 `Generate()` / `sendStreamingRequest()` UI 入口接管、双标签页刷新后的 active job 恢复，以及 provider failure 后的跨标签页状态恢复；断线类测试继续采用 provider/gateway 响应闸门或定向 WebSocket 连接注入，不使用系统断网。
+- 已完成 capability 开启时浏览器真实 Core WS server-context streaming、服务端 World Info/插件 interception、response-gated 远端停止，以及第二页刷新后的 active job 识别、Stop 和双页 UI 收敛；完整文本流接管与 provider 失败后的真实跨标签页错误 UI 验收仍未完成。
+- 下一阶段继续沿 Core prompt handoff 主线补齐真实 `Generate()` / `sendStreamingRequest()` UI 入口和消息落地去重、provider failure 后的跨标签页状态恢复，再推进刷新后的完整文本接管；断线类测试继续采用 provider/gateway 响应闸门或定向 WebSocket 连接注入，不使用系统断网。

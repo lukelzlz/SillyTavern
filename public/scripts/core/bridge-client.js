@@ -44,7 +44,7 @@ export class BridgeClient {
         /** @type {number} Number of server-originated events currently being projected. */
         this.remoteEventDepth = 0;
 
-        /** @type {{ chat: any[], chatMetadata: Record<string, unknown>, version: number, onSync?: Function, onGenerationState?: Function, generationState: string|null, snapshotMeta: object, serverInitialized: boolean, dirty: boolean }|null} */
+        /** @type {{ chat: any[], chatMetadata: Record<string, unknown>, version: number, onSync?: Function, onGenerationState?: Function, onGenerationError?: Function, generationState: string|null, snapshotMeta: object, serverInitialized: boolean, dirty: boolean }|null} */
         this.stateBinding = null;
 
         this.init();
@@ -277,6 +277,11 @@ export class BridgeClient {
             if (msg.type === 'handshake') {
                 console.log('[Core Bridge] Handshake complete:', msg.summary);
                 this.capabilities = msg.capabilities || {};
+                // Job snapshots use id; live events and UI controls use jobId.
+                // Normalize at the boundary before exposing readiness or recovering streams.
+                const jobId = [msg.activeJob?.jobId, msg.activeJob?.id]
+                    .find(id => typeof id === 'string' && id.trim().length > 0);
+                this.activeGenerationJob = jobId ? { ...msg.activeJob, jobId } : null;
                 this.isReady = true;
                 this.connectionState = 'READY';
                 for (const waiter of this.readyWaiters.splice(0)) {
@@ -286,7 +291,6 @@ export class BridgeClient {
                 this.recoverGenerationListeners().catch((error) => {
                     console.warn('[Core Bridge] Failed to recover generation streams after handshake:', error);
                 });
-                this.activeGenerationJob = msg.activeJob || null;
                 if (this.activeGenerationJob && eventSource && typeof eventSource.emit === 'function') {
                     await eventSource.emit('generation:active', this.activeGenerationJob);
                 }
@@ -299,10 +303,10 @@ export class BridgeClient {
     /**
      * Binds the current UI state containers as a server-authoritative projection.
      * The arrays/objects are mutated in place so existing DOM and plugin references remain valid.
-     * @param {{ chat: any[], chatMetadata?: Record<string, unknown>, characterId?: string|null, characterName?: string|null, chatId?: string|null, onSync?: Function, onGenerationState?: Function, bootstrap?: boolean }} binding
+     * @param {{ chat: any[], chatMetadata?: Record<string, unknown>, characterId?: string|null, characterName?: string|null, chatId?: string|null, onSync?: Function, onGenerationState?: Function, onGenerationError?: Function, bootstrap?: boolean }} binding
      * @returns {Promise<void>}
      */
-    async bindState({ chat, chatMetadata = {}, characterId = null, characterName = null, chatId = null, onSync, onGenerationState, bootstrap = true } = {}) {
+    async bindState({ chat, chatMetadata = {}, characterId = null, characterName = null, chatId = null, onSync, onGenerationState, onGenerationError, bootstrap = true } = {}) {
         if (!Array.isArray(chat)) {
             throw new TypeError('[Core Bridge] bindState requires a chat array');
         }
@@ -316,6 +320,7 @@ export class BridgeClient {
             version: 0,
             onSync,
             onGenerationState,
+            onGenerationError,
             generationState: null,
             snapshotMeta: { characterId, characterName, chatId },
             serverInitialized: !bootstrap,
@@ -944,7 +949,7 @@ export class BridgeClient {
             }
             if (catchup?.status === 'FAILED') {
                 state.terminal = true;
-                throw new Error(catchup.error || 'Generation failed');
+                throw Object.assign(new Error(catchup.error || 'Generation failed'), { code: 'CORE_GENERATION_FAILED' });
             }
             return null;
         };
@@ -1006,7 +1011,7 @@ export class BridgeClient {
                 }
                 if (job?.status === 'FAILED') {
                     state.terminal = true;
-                    throw new Error(job.error || 'Generation failed');
+                    throw Object.assign(new Error(job.error || 'Generation failed'), { code: 'CORE_GENERATION_FAILED' });
                 }
 
                 while (true) {
@@ -1067,7 +1072,7 @@ export class BridgeClient {
 
                     if (item.event === 'generation:failed') {
                         state.terminal = true;
-                        throw new Error(data.error || 'Generation failed');
+                        throw Object.assign(new Error(data.error || 'Generation failed'), { code: 'CORE_GENERATION_FAILED' });
                     }
                 }
             } finally {
@@ -1090,6 +1095,7 @@ export class BridgeClient {
             if (event === 'generation:started') {
                 this.activeGenerationJob = {
                     ...(this.activeGenerationJob?.jobId === jobId ? this.activeGenerationJob : {}),
+                    ...data,
                     jobId,
                     status: data.status || 'PREPARING',
                 };
@@ -1108,7 +1114,19 @@ export class BridgeClient {
                                     : this.activeGenerationJob.status,
                 };
                 if (['generation:completed', 'generation:aborted', 'generation:failed'].includes(event)) {
+                    const failedJob = this.activeGenerationJob;
                     this.activeGenerationJob = null;
+                    const binding = this.stateBinding;
+                    // Matching and clearing the active job makes duplicate terminal
+                    // frames harmless. Do not report a different chat's failure.
+                    if (event === 'generation:failed' && binding?.onGenerationError
+                        && String(failedJob.chatId ?? '') === String(binding.snapshotMeta.chatId ?? '')) {
+                        try {
+                            binding.onGenerationError(failedJob);
+                        } catch (error) {
+                            console.warn('[Core Bridge] Failed to report generation error:', error);
+                        }
+                    }
                 }
             }
         }

@@ -2,7 +2,6 @@ import WebSocket from 'ws';
 import { describe, test, expect, beforeAll, afterAll } from '@jest/globals';
 import {
     CoreAuthServerFixture,
-    waitForWsMessage,
     waitForWsClose,
 } from './util/core-auth-fixture.js';
 
@@ -390,7 +389,7 @@ describe('Core Authentication & Reverse Proxy Security Regression (Live Server S
             expect(conn.protocol).toBe('st-core.v1');
 
             // Server must emit initial authenticated handshake frame bound to alice
-            const msg = await waitForWsMessage(conn.ws, 2000);
+            const msg = await conn.handshake;
             expect(msg).toMatchObject({
                 type: 'handshake',
                 status: 'authenticated',
@@ -576,13 +575,13 @@ describe('Core Authentication & Reverse Proxy Security Regression (Live Server S
             // Alice connects with Alice ticket
             const aliceConn = await fixture.connectWs({ ticket: aliceTicket, origin: fixture.baseUrl });
             expect(aliceConn.status).toBe(101);
-            const aliceMsg = await waitForWsMessage(aliceConn.ws, 2000);
+            const aliceMsg = await aliceConn.handshake;
             expect(aliceMsg.user || aliceMsg.userId).toBe('alice');
 
             // Bob connects with Bob ticket
             const bobConn = await fixture.connectWs({ ticket: bobTicket, origin: fixture.baseUrl });
             expect(bobConn.status).toBe(101);
-            const bobMsg = await waitForWsMessage(bobConn.ws, 2000);
+            const bobMsg = await bobConn.handshake;
             expect(bobMsg.user || bobMsg.userId).toBe('bob');
 
             aliceConn.ws?.close();

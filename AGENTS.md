@@ -75,6 +75,7 @@ node server.js
 - **[前端 Extension 与服务端 Plugin 职责边界]**：
   - 前端扩展位于 `public/scripts/extensions/third-party/`，主控 DOM 交互、CSS 美化与前端事件拦截。
   - 服务端插件位于 `plugins/`，须在 `config.yaml` 中显式开启 `enableServerPlugins: true`，负责 Node 端重度计算与原生能力扩展。
+- **[Core 刷新任务身份契约]**：服务端 job 快照使用 `id`，实时事件和浏览器生成控制使用 `jobId`。必须在 BridgeClient handshake 边界统一标识，并在 ready / reconnect recovery 前完成；只兼容 Stop 按钮而不覆盖终态匹配会留下 stale active job。见 `docs/sessions/SESSION-20261025-refreshed-tab-stop-blocker.md`。
 
 ---
 
@@ -91,3 +92,5 @@ node server.js
 | 2026-10-20 / PROPOSAL-004 | Spec | 服务端 Prompt 装配等价性纯数据契约与黄金差分 | `docs/proposals/PROPOSAL-004-prompt-parity-golden-contract.md`, `docs/decisions/ADR-004-prompt-parity-differential-testing.md` | Accepted |
 | 2026-10-20 / PROPOSAL-005 | Spec | 服务端生成编排器与后台常驻任务管理器 (锁屏断网续传) | `docs/proposals/PROPOSAL-005-generation-orchestrator.md`, `docs/decisions/ADR-005-generation-orchestrator.md` | Accepted |
 | 2026-10-25 / SESSION-20261025 | Session | Core World Info 服务端交接递归、大小写与 chronological scan parity 阶段推进 | `docs/sessions/SESSION-20261025-world-info-server-handoff-recursion.md` | Tested |
+| 2026-10-25 / SESSION-refresh-stop | Session | Core 刷新标签页任务身份规范化、远端 Stop 与双页 idle 闭环 | `docs/sessions/SESSION-20261025-refreshed-tab-stop-blocker.md` | Deployed（隔离自动化联调；未用户验收） |
+| 2026-10-25 / SESSION-core-ui-generation | Session | Core 实际发送 UI、消息唯一落地、provider 失败跨标签恢复 | `docs/sessions/SESSION-20261025-core-ui-generation.md` | Tested（隔离自动化通过；测试目录存在既有 lint 阻塞；未用户验收） |

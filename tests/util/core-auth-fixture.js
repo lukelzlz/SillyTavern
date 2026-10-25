@@ -48,9 +48,10 @@ export class CoreAuthServerFixture {
      * @param {object} [options]
      * @param {boolean} [options.enableUserAccounts=true]
      * @param {boolean} [options.disableCsrf=false]
+     * @param {boolean} [options.browserHandoff=false] Enable isolated browser handoff tests with default UI content.
      * @returns {Promise<CoreAuthServerFixture>}
      */
-    async start({ enableUserAccounts = true, disableCsrf = false } = {}) {
+    async start({ enableUserAccounts = true, disableCsrf = false, browserHandoff = false } = {}) {
         this.tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-core-auth-subproc-'));
         this.configPath = path.join(this.tempDir, 'config.yaml');
         this.dataRoot = path.join(this.tempDir, 'data');
@@ -63,7 +64,12 @@ export class CoreAuthServerFixture {
             configContent = configContent.replace(/enableUserAccounts:\s*false/, 'enableUserAccounts: true');
         }
         // Speed up startup in tests by skipping unnecessary content copy
-        configContent = configContent.replace(/skipContentCheck:\s*false/, 'skipContentCheck: true');
+        if (!browserHandoff) {
+            configContent = configContent.replace(/skipContentCheck:\s*false/, 'skipContentCheck: true');
+        } else {
+            configContent = configContent.replace(/browserPromptHandoffEnabled:\s*false/, 'browserPromptHandoffEnabled: true');
+            configContent = configContent.replace(/pluginInterceptionEnabled:\s*false/, 'pluginInterceptionEnabled: true');
+        }
 
         // Configure Core transport settings according to PROPOSAL-002
         if (/core:\s*\n\s*transport:/.test(configContent)) {
@@ -294,7 +300,7 @@ core:
      * @param {string} [options.query]
      * @param {Record<string, string>} [options.headers]
      * @param {number} [options.timeout=5000]
-     * @returns {Promise<{ ws: import('ws').WebSocket | null, status: number, protocol: string | null, error: Error | null }>}
+     * @returns {Promise<{ ws: import('ws').WebSocket | null, status: number, protocol: string | null, error: Error | null, handshake?: Promise<any> }>}
      */
     async connectWs({ ticket, protocols, origin, query, headers = {}, timeout = 5000 } = {}) {
         const WebSocketModule = (await import('ws')).default;
@@ -367,11 +373,16 @@ core:
                 if (!settled) {
                     settled = true;
                     cleanup();
+                    // Listen before returning: ws can emit the first frame in the same turn as open.
+                    const handshake = waitForWsMessage(ws, 2000);
+                    // Some callers only test the upgrade or revocation, not the handshake.
+                    handshake.catch(() => {});
                     resolve({
                         ws,
                         status: 101,
                         protocol: ws.protocol,
                         error: null,
+                        handshake,
                     });
                 }
             });

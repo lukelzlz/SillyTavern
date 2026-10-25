@@ -343,24 +343,7 @@ export class SyntheticResponse extends Writable {
             }
 
             if (trimmed.startsWith('data:')) {
-                const dataPayload = trimmed.slice(5).trim();
-                if (dataPayload === '[DONE]') {
-                    continue;
-                }
-
-                try {
-                    const parsed = JSON.parse(dataPayload);
-                    this._captureProviderMetadata(parsed);
-                    const delta = extractDelta(parsed);
-                    if (delta) {
-                        this.job.appendChunk(delta);
-                    }
-                } catch {
-                    // Non-JSON SSE payload: treat as raw delta if non-empty
-                    if (dataPayload) {
-                        this.job.appendChunk(dataPayload);
-                    }
-                }
+                this._captureStreamPayload(trimmed.slice(5).trim());
             }
         }
 
@@ -395,19 +378,7 @@ export class SyntheticResponse extends Writable {
 
         // Flush any remaining line in SSE buffer
         if (this._sseBuffer.trim().startsWith('data:')) {
-            const dataPayload = this._sseBuffer.trim().slice(5).trim();
-            if (dataPayload && dataPayload !== '[DONE]') {
-                try {
-                    const parsed = JSON.parse(dataPayload);
-                    this._captureProviderMetadata(parsed);
-                    const delta = extractDelta(parsed);
-                    if (delta) {
-                        this.job.appendChunk(delta);
-                    }
-                } catch {
-                    this.job.appendChunk(dataPayload);
-                }
-            }
+            this._captureStreamPayload(this._sseBuffer.trim().slice(5).trim());
         }
 
         if (!this.job.isTerminal()) {
@@ -415,6 +386,31 @@ export class SyntheticResponse extends Writable {
         }
 
         callback();
+    }
+
+    /**
+     * HTTP 200 streams may still contain provider error frames. They must not
+     * settle partial text as a successful reply, including an unterminated final line.
+     * @param {string} payload SSE data payload
+     */
+    _captureStreamPayload(payload) {
+        if (!payload || payload === '[DONE]' || this.job.isTerminal()) return;
+        let parsed;
+        try {
+            parsed = JSON.parse(payload);
+        } catch {
+            this.job.appendChunk(payload);
+            return;
+        }
+        if (parsed?.error || parsed?.quota_error) {
+            // Provider payloads may include credentials or internal URLs.
+            this.job.fail(new Error('Gateway returned a streaming error'));
+            this.job.abortController.abort('Provider stream failed');
+            return;
+        }
+        this._captureProviderMetadata(parsed);
+        const delta = extractDelta(parsed);
+        if (delta) this.job.appendChunk(delta);
     }
 
     /**
