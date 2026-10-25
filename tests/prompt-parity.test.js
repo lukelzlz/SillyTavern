@@ -180,6 +180,51 @@ describe('Prompt Parity Phase 1: 8 Golden Fixture Differential Tests', () => {
             content: 'Post-history safety instruction.',
         });
     });
+
+    test('Server context can scan canonical World Info entries before prompt assembly', async () => {
+        const fixture = loadFixture('GF-PROMPT-01-standard-chat.json');
+        const input = structuredClone(fixture.input);
+        input.worldInfo = {
+            entries: [
+                {
+                    uid: 'wi-before',
+                    key: ['chronometer'],
+                    content: 'The chronometer is powered by a crystal escapement.',
+                    position: 0,
+                },
+                {
+                    uid: 'wi-depth',
+                    key: ['temporal slip'],
+                    content: 'Temporal slips are caused by phase drift.',
+                    position: 4,
+                    depth: 1,
+                    role: 1,
+                },
+            ],
+            globalScanData: {},
+            options: { budget: 0 },
+        };
+        input.promptOrder = ['main', 'worldInfoBefore', 'chatHistory'];
+        input.recordedTokenCounts = {
+            main: 6,
+            worldInfoBefore: 10,
+            newMainChat: 5,
+            'chatHistory-1': 14,
+            'chatHistory-2': 16,
+            'chatHistory-3': 11,
+            injected_depth_1_order_100_user: 7,
+        };
+
+        const output = await PromptAssembler.assemble(input, {
+            tokenizer: new DualTrackTokenizer({
+                tokenizer: createPromptTokenizer({ source: 'openai', model: 'gpt-4o' }),
+            }),
+        });
+
+        expect(output.chat.map((message) => message.content)).toContain('The chronometer is powered by a crystal escapement.');
+        expect(output.chat.map((message) => message.content)).toContain('Temporal slips are caused by phase drift.');
+        expect(output.metadata.worldInfoScan.activatedEntryUids).toEqual(['wi-before', 'wi-depth']);
+    });
 });
 
 describe('Prompt Parity: Dual-Track Tokenizer & Fail-Closed Guardrails', () => {

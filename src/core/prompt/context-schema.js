@@ -155,6 +155,29 @@ export function validateCorePromptContext(context) {
     if (isPlainObject(envelope.worldInfo)) {
         validateOptionalString(envelope.worldInfo.worldInfoBefore, 'worldInfo.worldInfoBefore', issues);
         validateOptionalString(envelope.worldInfo.worldInfoAfter, 'worldInfo.worldInfoAfter', issues);
+        if (envelope.worldInfo.entries !== undefined) {
+            if (!Array.isArray(envelope.worldInfo.entries)) {
+                addIssue(issues, 'worldInfo.entries', 'must be an array when provided');
+            } else {
+                envelope.worldInfo.entries.forEach((entry, index) => {
+                    if (!isPlainObject(entry)) {
+                        addIssue(issues, `worldInfo.entries[${index}]`, 'must be an object');
+                        return;
+                    }
+                    if (entry.content !== undefined && typeof entry.content !== 'string') {
+                        addIssue(issues, `worldInfo.entries[${index}].content`, 'must be a string when provided');
+                    }
+                    if (entry.key !== undefined && !Array.isArray(entry.key)) {
+                        addIssue(issues, `worldInfo.entries[${index}].key`, 'must be an array when provided');
+                    }
+                });
+            }
+        }
+        for (const key of ['globalScanData', 'options']) {
+            if (envelope.worldInfo[key] !== undefined && !isPlainObject(envelope.worldInfo[key])) {
+                addIssue(issues, `worldInfo.${key}`, 'must be an object when provided');
+            }
+        }
     }
 
     if (isPlainObject(envelope.toolsContext)

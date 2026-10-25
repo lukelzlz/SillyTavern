@@ -7,6 +7,7 @@ import {
     PIPELINE_STAGES,
 } from './constants.js';
 import { DualTrackTokenizer } from './tokenizer-adapter.js';
+import { CanonicalWorldInfoScanner } from '../world-info/canonical-scanner.js';
 
 let promptConvertersPromise = null;
 
@@ -96,9 +97,9 @@ export class PromptAssembler {
         const settings = input.settings || {};
         const genControl = input.generationControl || { type: 'normal', dryRun: false };
         const charCtx = input.characterContext || {};
-        const worldInfo = input.worldInfo || { worldInfoBefore: '', worldInfoAfter: '' };
+        let worldInfo = input.worldInfo || { worldInfoBefore: '', worldInfoAfter: '' };
         const extPrompts = input.extensionPrompts || {};
-        const inputPrompts = input.prompts || [];
+        let inputPrompts = input.prompts || [];
         const chatHistory = input.chatHistory || [];
         const messageExamples = input.messageExamples || [];
         const toolsCtx = input.toolsContext || { canPerformToolCalls: false };
@@ -115,6 +116,41 @@ export class PromptAssembler {
         const tokenizer = options.tokenizer || new DualTrackTokenizer({
             recordedTokenCounts: recordedCounts,
         });
+
+        let worldInfoScan = null;
+        if (Array.isArray(worldInfo.entries)) {
+            worldInfoScan = await CanonicalWorldInfoScanner.scan({
+                entries: worldInfo.entries,
+                chatMessages: chatHistory,
+                globalScanData: {
+                    trigger: genControl.type,
+                    personaDescription: charCtx.personaDescription || '',
+                    characterDescription: charCtx.charDescription || '',
+                    characterPersonality: charCtx.charPersonality || '',
+                    scenario: charCtx.scenario || '',
+                    ...(worldInfo.globalScanData || {}),
+                },
+                extensionPrompts: extPrompts,
+                options: worldInfo.options || {},
+            });
+
+            worldInfo = {
+                ...worldInfo,
+                worldInfoBefore: worldInfoScan.worldInfoBefore,
+                worldInfoAfter: worldInfoScan.worldInfoAfter,
+            };
+
+            const depthPrompts = (worldInfoScan.WIDepthEntries || []).flatMap((entry, index) => [{
+                identifier: `worldInfoDepth-${entry.depth}-${entry.role}-${index}`,
+                role: entry.role === 1 ? 'user' : entry.role === 2 ? 'assistant' : 'system',
+                content: entry.entries.join('\n'),
+                injection_position: INJECTION_POSITION.ABSOLUTE,
+                injection_depth: entry.depth,
+                injection_order: 100,
+                extension: true,
+            }]);
+            inputPrompts = [...inputPrompts, ...depthPrompts];
+        }
 
         const macroVars = {
             char: charCtx.name2 || 'Assistant',
@@ -925,6 +961,12 @@ export class PromptAssembler {
                 squashedCount,
                 injectedPromptsCount,
                 timingLog,
+                ...(worldInfoScan ? {
+                    worldInfoScan: {
+                        activatedEntryUids: worldInfoScan.activatedEntryUids,
+                        debugTrace: worldInfoScan.debugTrace,
+                    },
+                } : {}),
             },
             ...(providerTransforms ? { providerTransforms } : {}),
         };

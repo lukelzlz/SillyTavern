@@ -1533,6 +1533,9 @@ async function preparePromptsForChatCompletion({ scenario, charPersonality, name
  * @param {string} [options.scenario]
  * @param {string} [options.worldInfoBefore]
  * @param {string} [options.worldInfoAfter]
+ * @param {object[]} [options.worldInfoEntries] Canonical World Info entries for server-side scanning
+ * @param {object} [options.worldInfoGlobalScanData] Additional World Info scan sources
+ * @param {object} [options.worldInfoOptions] Canonical World Info scan options
  * @param {string} [options.systemPromptOverride]
  * @param {string} [options.jailbreakPromptOverride]
  * @param {string} [options.type]
@@ -1555,6 +1558,9 @@ export function buildCorePromptContext({
     scenario,
     worldInfoBefore,
     worldInfoAfter,
+    worldInfoEntries = null,
+    worldInfoGlobalScanData = null,
+    worldInfoOptions = null,
     systemPromptOverride,
     jailbreakPromptOverride,
     type = 'normal',
@@ -1625,6 +1631,9 @@ export function buildCorePromptContext({
         worldInfo: {
             worldInfoBefore,
             worldInfoAfter,
+            ...(Array.isArray(worldInfoEntries) ? { entries: structuredClone(worldInfoEntries) } : {}),
+            ...(worldInfoGlobalScanData && typeof worldInfoGlobalScanData === 'object' ? { globalScanData: structuredClone(worldInfoGlobalScanData) } : {}),
+            ...(worldInfoOptions && typeof worldInfoOptions === 'object' ? { options: structuredClone(worldInfoOptions) } : {}),
         },
         promptOrder: collection.map((prompt) => prompt.identifier),
         prompts: collection,
@@ -1715,6 +1724,9 @@ function isSafeServerPromptContext(context) {
  * @param {string} content.cyclePrompt - The last prompt used for chat message continuation.
  * @param {string} content.systemPromptOverride - The system prompt override.
  * @param {string} content.jailbreakPromptOverride - The jailbreak prompt override.
+ * @param {object[]} [content.worldInfoEntries] Canonical World Info entries for server-side scanning.
+ * @param {object} [content.worldInfoGlobalScanData] Additional World Info scan sources.
+ * @param {object} [content.worldInfoOptions] Canonical World Info scan options.
  * @param {object} content.extensionPrompts - An array of additional prompts.
  * @param {object[]} content.messages - An array of messages to be used as chat history.
  * @param {object[][]} content.messageExamples - An array of messages to be used as dialogue examples.
@@ -1730,6 +1742,9 @@ export async function prepareOpenAIMessages({
     scenario,
     worldInfoBefore,
     worldInfoAfter,
+    worldInfoEntries = null,
+    worldInfoGlobalScanData = null,
+    worldInfoOptions = null,
     bias,
     type,
     quietPrompt,
@@ -1784,6 +1799,9 @@ export async function prepareOpenAIMessages({
             scenario,
             worldInfoBefore,
             worldInfoAfter,
+            worldInfoEntries,
+            worldInfoGlobalScanData,
+            worldInfoOptions,
             systemPromptOverride,
             jailbreakPromptOverride,
             type,

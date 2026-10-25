@@ -32,7 +32,7 @@ export class CanonicalWorldInfoScanner {
      * Build the text buffer for an entry respecting scanDepth, globalScanData, and source match flags.
      * @param {object} params
      * @param {object} params.entry
-     * @param {Array<string | { mes?: string, text?: string }>} params.chatMessages
+     * @param {Array<string | { mes?: string, text?: string, content?: string | object[] }>} params.chatMessages
      * @param {object} params.globalScanData
      * @param {Record<string, { value: string, scan?: boolean }>} [params.extensionPrompts]
      * @returns {string}
@@ -54,6 +54,14 @@ export class CanonicalWorldInfoScanner {
                 text = msg.mes.trim();
             } else if (msg && typeof msg.text === 'string') {
                 text = msg.text.trim();
+            } else if (msg && typeof msg.content === 'string') {
+                text = msg.content.trim();
+            } else if (msg && Array.isArray(msg.content)) {
+                text = msg.content
+                    .filter((part) => part && part.type === 'text' && typeof part.text === 'string')
+                    .map((part) => part.text.trim())
+                    .filter(Boolean)
+                    .join('\n');
             }
             if (text) {
                 slicedMessages.push(text);
@@ -147,14 +155,15 @@ export class CanonicalWorldInfoScanner {
 
     /**
      * Execute canonical world info scan.
-     * @param {object} input
-     * @param {Array<object>} input.entries
+     * @param {object} [input={}]
+     * @param {Array<object>} [input.entries]
      * @param {Array<string | object>} [input.chatMessages]
      * @param {object} [input.globalScanData]
      * @param {Record<string, object>} [input.extensionPrompts]
      * @param {object} [input.options]
      * @param {number} [input.options.budget=0]
      * @param {boolean} [input.options.matchWholeWords=false]
+     * @param {string} [input.options.trigger]
      * @param {import('./token-budget.js').ITokenBudgetEstimator} [input.options.tokenEstimator]
      * @param {Record<string, number>} [input.options.recordedTokens]
      * @param {(text: string) => Promise<number> | number} [input.options.tokenizer]
