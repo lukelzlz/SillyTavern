@@ -61,7 +61,7 @@ export class WebSocketBridge {
         });
         /** @type {Map<string, Set<import('ws').WebSocket>>} userId -> Set<WebSocket> */
         this.userClients = new Map();
-        /** @type {Map<string, { resolve: Function, timer: NodeJS.Timeout }>} interceptId -> resolver */
+        /** @type {Map<string, { userId: string, resolve: Function, timer: NodeJS.Timeout }>} interceptId -> resolver */
         this.pendingInterceptions = new Map();
 
         this.#setupWss();
@@ -142,11 +142,29 @@ export class WebSocketBridge {
     }
 
     #bindSessionEngine() {
-        // Forward session events to all connected clients for that user
-        sessionEngine.on('message:appended', (payload) => {
-            const userId = payload?.userId || 'default';
-            this.broadcastEvent(userId, 'MESSAGE_RECEIVED', payload);
-        });
+        // Forward authoritative session events to all connected clients for that user.
+        const forwardedEvents = [
+            'state:updated',
+            'state:snapshot',
+            'state:patch',
+            'message:appended',
+            'message:updated',
+            'message:deleted',
+            'chat:spliced',
+            'metadata:updated',
+        ];
+
+        for (const eventName of forwardedEvents) {
+            sessionEngine.on(eventName, (payload) => {
+                const userId = payload?.userId || 'default';
+                this.broadcastEvent(userId, eventName, payload);
+
+                // Preserve the historical event name consumed by extensions.
+                if (eventName === 'message:appended') {
+                    this.broadcastEvent(userId, 'MESSAGE_RECEIVED', payload);
+                }
+            });
+        }
     }
 
     /**
@@ -364,7 +382,7 @@ export class WebSocketBridge {
         ticketManager.revokeUserTickets(userHandle);
     }
 
-    #handleMessage(ws, rawData) {
+    async #handleMessage(ws, rawData) {
         try {
             const msg = JSON.parse(rawData.toString());
             const { type, id } = msg;
@@ -377,10 +395,132 @@ export class WebSocketBridge {
             if (type === 'intercept_ack') {
                 const { interceptId, payload } = msg;
                 const pending = this.pendingInterceptions.get(interceptId);
-                if (pending) {
+                if (pending && pending.userId === ws.userId) {
                     clearTimeout(pending.timer);
                     this.pendingInterceptions.delete(interceptId);
                     pending.resolve(payload);
+                }
+                return;
+            }
+
+            if (type === 'generate:start') {
+                if (!getCoreConfig('core.generation.orchestratorEnabled', true, 'boolean')) {
+                    ws.send(JSON.stringify({
+                        type: 'job:failed',
+                        requestId: id,
+                        error: 'Generation orchestrator is disabled.',
+                    }));
+                    return;
+                }
+
+                try {
+                    const { jobManager } = await import('./generation/job-manager.js');
+                    const job = await jobManager.createJob({
+                        userId: ws.userId,
+                        body: msg.payload || {},
+                    });
+                    ws.send(JSON.stringify({
+                        type: 'job:created',
+                        requestId: id,
+                        jobId: job.id,
+                        state: job.status,
+                    }));
+                } catch (err) {
+                    ws.send(JSON.stringify({
+                        type: 'job:failed',
+                        requestId: id,
+                        error: err.message || 'Failed to start generation job',
+                    }));
+                }
+                return;
+            }
+
+            if (type === 'generate:abort') {
+                const { jobManager } = await import('./generation/job-manager.js');
+                const jobId = msg.payload?.jobId;
+                const reason = msg.payload?.reason || 'User aborted';
+
+                if (!getCoreConfig('core.generation.orchestratorEnabled', true, 'boolean')) {
+                    ws.send(JSON.stringify({
+                        type: 'job:failed',
+                        requestId: id,
+                        jobId,
+                        error: 'Generation orchestrator is disabled.',
+                    }));
+                    return;
+                }
+
+                const job = jobManager.getJob(jobId);
+                if (!job) {
+                    ws.send(JSON.stringify({
+                        type: 'job:failed',
+                        requestId: id,
+                        jobId,
+                        error: 'Job not found.',
+                    }));
+                    return;
+                }
+
+                if (job.userId !== ws.userId) {
+                    ws.send(JSON.stringify({
+                        type: 'job:failed',
+                        requestId: id,
+                        jobId,
+                        error: 'Unauthorized: You do not have access to this job.',
+                    }));
+                    return;
+                }
+
+                jobManager.abortJob(jobId, reason);
+                ws.send(JSON.stringify({
+                    type: 'job:aborted',
+                    requestId: id,
+                    jobId,
+                    status: job.status,
+                }));
+                return;
+            }
+
+            if (type === 'generate:reconnect') {
+                const { jobManager } = await import('./generation/job-manager.js');
+                const jobId = msg.payload?.jobId;
+                const lastSeq = msg.payload?.lastSeq;
+
+                if (!getCoreConfig('core.generation.orchestratorEnabled', true, 'boolean')) {
+                    ws.send(JSON.stringify({
+                        type: 'job:failed',
+                        requestId: id,
+                        jobId,
+                        error: 'Generation orchestrator is disabled.',
+                    }));
+                    return;
+                }
+
+                const job = jobManager.getJob(jobId);
+                if (job && job.userId === ws.userId) {
+                    const catchup = job.getCatchupChunks(lastSeq);
+                    ws.send(JSON.stringify({
+                        type: 'job:catchup',
+                        requestId: id,
+                        jobId: job.id,
+                        fromSeq: catchup.fromSeq,
+                        toSeq: catchup.toSeq,
+                        chunks: catchup.chunks,
+                    }));
+                } else if (!job) {
+                    ws.send(JSON.stringify({
+                        type: 'job:failed',
+                        requestId: id,
+                        jobId,
+                        error: 'Job not found.',
+                    }));
+                } else {
+                    ws.send(JSON.stringify({
+                        type: 'job:failed',
+                        requestId: id,
+                        jobId,
+                        error: 'Unauthorized: You do not have access to this job.',
+                    }));
                 }
                 return;
             }
@@ -412,8 +552,17 @@ export class WebSocketBridge {
                 case 'deleteMessage':
                     result = session.deleteMessage(params.index);
                     break;
+                case 'spliceChat':
+                    result = session.spliceChat(params.start, params.deleteCount, params.items);
+                    break;
+                case 'updateMetadata':
+                    result = session.updateMetadata(params.updates);
+                    break;
                 case 'getSessionSummary':
                     result = session.getSummary();
+                    break;
+                case 'getStateSnapshot':
+                    result = session.getSnapshot();
                     break;
                 case 'scanWorldInfo':
                     result = WorldInfoEngine.scan(params);
@@ -489,7 +638,7 @@ export class WebSocketBridge {
                 resolve(payload);
             }, timeoutMs);
 
-            this.pendingInterceptions.set(interceptId, { resolve, timer });
+            this.pendingInterceptions.set(interceptId, { userId, resolve, timer });
 
             // Send to the first active client for the user (primary UI)
             for (const ws of clients) {

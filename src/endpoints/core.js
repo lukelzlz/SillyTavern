@@ -4,6 +4,7 @@ import { RateLimiterMemory } from 'rate-limiter-flexible';
 import WorldInfoEngine from '../core/world-info-engine.js';
 import PromptEngine from '../core/prompt-engine.js';
 import ticketManager from '../core/ticket-manager.js';
+import jobManager from '../core/generation/job-manager.js';
 import { getConfigValue } from '../util.js';
 import { getIpAddress } from '../express-common.js';
 
@@ -151,6 +152,210 @@ router.post('/chat-completions/generate', async (req, res) => {
             message: 'Core generation routing is disabled by default for security.',
         },
     });
+});
+
+/**
+ * Creates and enqueues a background generation job.
+ * Protected by setUserDataMiddleware + csrfSyncProtection + requireLoginMiddleware.
+ */
+router.post('/generation/jobs', async (req, res) => {
+    try {
+        const isEnabled = getCoreConfig('core.generation.orchestratorEnabled', true, 'boolean');
+        if (!isEnabled) {
+            return res.status(403).json({
+                ok: false,
+                error: 'Generation orchestrator is disabled.',
+            });
+        }
+
+        if (!req.user || !req.user.profile) {
+            return res.status(403).json({
+                ok: false,
+                error: 'Unauthorized: User not authenticated.',
+            });
+        }
+
+        const user = req.user.profile;
+        if (user.enabled === false) {
+            return res.status(403).json({
+                ok: false,
+                error: 'Unauthorized: User is disabled.',
+            });
+        }
+
+        const userId = user.handle || 'default';
+
+        if (!req.body || typeof req.body !== 'object') {
+            return res.status(400).json({
+                ok: false,
+                error: 'Invalid request body.',
+            });
+        }
+
+        if (jobManager.hasActiveJob(userId)) {
+            return res.status(409).json({
+                ok: false,
+                error: 'Another generation job is currently in progress.',
+            });
+        }
+
+        const job = await jobManager.createJob({
+            userId,
+            body: req.body,
+            req,
+        });
+
+        return res.status(201).json({
+            ok: true,
+            jobId: job.id,
+            status: job.status,
+            createdAt: job.createdAt,
+        });
+    } catch (err) {
+        if (err.statusCode === 409 || err.status === 409 || err.name === 'ActiveJobConflictError') {
+            return res.status(409).json({
+                ok: false,
+                error: 'Another generation job is currently in progress.',
+            });
+        }
+        console.error('[Core Generation Jobs] Error creating job:', err);
+        return res.status(500).json({
+            ok: false,
+            error: err.message || 'Failed to create generation job',
+        });
+    }
+});
+
+/**
+ * Retrieves generation job status, full/partial text, and optional catchup chunks for reconnection.
+ */
+router.get('/generation/jobs/:jobId', (req, res) => {
+    try {
+        const isEnabled = getCoreConfig('core.generation.orchestratorEnabled', true, 'boolean');
+        if (!isEnabled) {
+            return res.status(403).json({
+                ok: false,
+                error: 'Generation orchestrator is disabled.',
+            });
+        }
+
+        if (!req.user || !req.user.profile) {
+            return res.status(403).json({
+                ok: false,
+                error: 'Unauthorized: User not authenticated.',
+            });
+        }
+
+        const user = req.user.profile;
+        if (user.enabled === false) {
+            return res.status(403).json({
+                ok: false,
+                error: 'Unauthorized: User is disabled.',
+            });
+        }
+
+        const userId = user.handle || 'default';
+        const jobId = req.params.jobId;
+
+        const job = jobManager.getJob(jobId);
+        if (!job) {
+            return res.status(404).json({
+                ok: false,
+                error: 'Job not found.',
+            });
+        }
+
+        // Multi-user isolation
+        if (job.userId !== userId && user.admin !== true) {
+            return res.status(403).json({
+                ok: false,
+                error: 'Unauthorized: You do not have access to this job.',
+            });
+        }
+
+        const responseData = {
+            ok: true,
+            job: job.toJSON(),
+        };
+
+        if (req.query.lastSeq !== undefined) {
+            const catchupInfo = job.getCatchupChunks(req.query.lastSeq);
+            responseData.catchup = catchupInfo.chunks;
+            responseData.catchupInfo = catchupInfo;
+        }
+
+        return res.json(responseData);
+    } catch (err) {
+        console.error('[Core Generation Jobs] Error retrieving job:', err);
+        return res.status(500).json({
+            ok: false,
+            error: err.message || 'Failed to retrieve generation job',
+        });
+    }
+});
+
+/**
+ * Explicitly aborts an active generation job.
+ */
+router.post('/generation/jobs/:jobId/abort', (req, res) => {
+    try {
+        const isEnabled = getCoreConfig('core.generation.orchestratorEnabled', true, 'boolean');
+        if (!isEnabled) {
+            return res.status(403).json({
+                ok: false,
+                error: 'Generation orchestrator is disabled.',
+            });
+        }
+
+        if (!req.user || !req.user.profile) {
+            return res.status(403).json({
+                ok: false,
+                error: 'Unauthorized: User not authenticated.',
+            });
+        }
+
+        const user = req.user.profile;
+        if (user.enabled === false) {
+            return res.status(403).json({
+                ok: false,
+                error: 'Unauthorized: User is disabled.',
+            });
+        }
+
+        const userId = user.handle || 'default';
+        const jobId = req.params.jobId;
+
+        const job = jobManager.getJob(jobId);
+        if (!job) {
+            return res.status(404).json({
+                ok: false,
+                error: 'Job not found.',
+            });
+        }
+
+        if (job.userId !== userId && user.admin !== true) {
+            return res.status(403).json({
+                ok: false,
+                error: 'Unauthorized: You cannot abort this job.',
+            });
+        }
+
+        const reason = req.body?.reason || 'User aborted';
+        jobManager.abortJob(jobId, reason);
+
+        return res.json({
+            ok: true,
+            jobId: job.id,
+            status: job.status,
+            abortReason: job.abortReason,
+        });
+    } catch (err) {
+        console.error('[Core Generation Jobs] Error aborting job:', err);
+        return res.status(500).json({
+            ok: false,
+            error: err.message || 'Failed to abort generation job',
+        });
+    }
 });
 
 export default router;

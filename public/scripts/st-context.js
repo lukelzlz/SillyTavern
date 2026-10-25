@@ -113,10 +113,50 @@ import { macros } from './macros/macro-system.js';
 import { MessageFormatter } from './message-formatter.js';
 import { coreBridge } from './core/bridge-client.js';
 
+/**
+ * Bind the currently loaded Tavern chat to the authenticated server Core.
+ * The initial sync is client-to-server so enabling the optional bridge cannot
+ * replace an existing browser chat with an empty server session.
+ * @param {{ bootstrap?: boolean, onSync?: Function }} [options]
+ * @returns {Promise<void>}
+ */
+async function bindCurrentCoreState(options = {}) {
+    await coreBridge.bindState({
+        chat,
+        chatMetadata: chat_metadata,
+        characterId: this_chid,
+        characterName: characters[this_chid]?.name ?? null,
+        chatId: getCurrentChatId(),
+        ...options,
+    });
+}
+
+let coreLifecycleSyncInstalled = false;
+
+function installCoreLifecycleSync() {
+    if (coreLifecycleSyncInstalled) {
+        return;
+    }
+    coreLifecycleSyncInstalled = true;
+
+    const sync = () => bindCurrentCoreState().catch((error) => {
+        // The bridge is optional and disabled by default. A failed sync must
+        // never interrupt the native browser chat lifecycle.
+        console.warn('[Core Bridge] Failed to bind current chat state:', error);
+    });
+
+    for (const event of [event_types.APP_READY, event_types.CHAT_LOADED, event_types.CHAT_CHANGED]) {
+        eventSource.on(event, sync);
+    }
+}
+
 export function getContext() {
+    installCoreLifecycleSync();
     return {
         accountStorage,
         coreBridge,
+        bindCoreState: bindCurrentCoreState,
+        unbindCoreState: () => coreBridge.unbindState(),
         chat,
         characters,
         groups,

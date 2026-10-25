@@ -413,3 +413,14 @@ core:
     trustedOrigins: []
     # Allow missing Origin header during upgrade (default: false, strict CSWSH fail-closed protection)
     allowMissingOrigin: false
+  generation:
+    # Whether server-side generation orchestrator is enabled (default: true)
+    orchestratorEnabled: true
+    # Maximum wait timeout for plugin prompt interception (milliseconds, default: 3000)
+    pluginInterceptionTimeoutMs: 3000
+    # Maximum chunk capacity for the streaming ring buffer (default: 2048)
+    streamChunkRingBufferSize: 2048
+    # Finished job retention duration before memory cleanup (seconds, default: 300)
+    jobRetentionSeconds: 300
+    # Enable plugin prompt interception over WebSocket (default: false)
+    pluginInterceptionEnabled: false
