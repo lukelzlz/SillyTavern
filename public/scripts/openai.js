@@ -1705,6 +1705,11 @@ function isSafeServerPromptContext(context) {
     return true;
 }
 
+function hasPromptReadyListeners() {
+    const listeners = eventSource?.events?.[event_types.CHAT_COMPLETION_PROMPT_READY];
+    return Array.isArray(listeners) && listeners.length > 0;
+}
+
 /**
  * Take a configuration object and prepares messages for a chat with OpenAI's chat completion API.
  * Handles prompts, prepares chat history, manages token budget, and processes various user settings.
@@ -1812,8 +1817,15 @@ export async function prepareOpenAIMessages({
         });
         serverOwnsPrompt = corePromptMode === 'server_context' && isSafeServerPromptContext(corePromptContext);
 
-        // Fill the chat completion with as much context as the budget allows
-        await populateChatCompletion(prompts, chatCompletion, { bias, quietPrompt, quietImage, type, cyclePrompt, messages, messageExamples });
+        // A server-owned request only needs the serialized context envelope.
+        // Avoid rebuilding the final prompt, token counts, and World Info on
+        // the browser before the server assembles the authoritative payload.
+        const serverContextOwnsPrompt = corePromptMode === 'server_context'
+            && isSafeServerPromptContext(corePromptContext);
+        if (!serverContextOwnsPrompt) {
+            await populateChatCompletion(prompts, chatCompletion, { bias, quietPrompt, quietImage, type, cyclePrompt, messages, messageExamples });
+        }
+        serverOwnsPrompt = serverContextOwnsPrompt;
     } catch (error) {
         if (error instanceof TokenBudgetExceededError) {
             toastr.error(t`Mandatory prompts exceed the context size.`);
@@ -1835,7 +1847,9 @@ export async function prepareOpenAIMessages({
         promptManager.setChatCompletion(chatCompletion);
 
         if (corePromptContext) {
-            corePromptContext.recordedTokenCounts = structuredClone(promptManager.tokenHandler.getCounts());
+            corePromptContext.recordedTokenCounts = serverOwnsPrompt
+                ? {}
+                : structuredClone(promptManager.tokenHandler.getCounts());
         }
 
         if (oai_settings.squash_system_messages && dryRun == false) {
@@ -3408,6 +3422,7 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null, co
         generate_data.characterName = name2 || null;
         if (promptMode === 'server_context') {
             generate_data.core_prompt_context = structuredClone(corePromptContext);
+            generate_data.core_prompt_interception = hasPromptReadyListeners();
         } else {
             // The browser has already emitted CHAT_COMPLETION_PROMPT_READY while
             // assembling this request. Mark the payload so the server orchestrator

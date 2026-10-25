@@ -745,6 +745,63 @@ describe('Generation Orchestrator & Server Job Manager Test Suite', () => {
             }
         });
 
+        test('Skips server-context plugin interception when the browser reports no listeners', async () => {
+            const previousPluginFlag = process.env.SILLYTAVERN_CORE_GENERATION_PLUGININTERCEPTIONENABLED;
+            process.env.SILLYTAVERN_CORE_GENERATION_PLUGININTERCEPTIONENABLED = 'true';
+
+            try {
+                const interceptionPayloads = [];
+                const gateway = async (_req, res) => {
+                    res.send({ choices: [{ message: { content: 'No interception response' } }] });
+                };
+                mockWsBridge.requestInterception = async (_user, _eventName, payload) => {
+                    interceptionPayloads.push(payload);
+                    return payload;
+                };
+                jobManager = new JobManager({
+                    generateHandler: gateway,
+                    sessionEngine: mockSessionEngine,
+                    wsBridge: mockWsBridge,
+                });
+
+                const job = await jobManager.createJob({
+                    userId: 'alice',
+                    body: {
+                        core_prompt_mode: 'server_context',
+                        core_prompt_interception: false,
+                        core_prompt_context: {
+                            schemaVersion: 1,
+                            settings: {
+                                source: 'openai',
+                                model: 'test-model',
+                                maxContext: 1000,
+                                maxTokens: 100,
+                            },
+                            generationControl: { type: 'normal' },
+                            characterContext: {},
+                            worldInfo: {},
+                            promptOrder: ['main', 'chatHistory'],
+                            prompts: [],
+                            extensionPrompts: {},
+                            chatHistory: [{ role: 'user', content: 'Hello' }],
+                            messageExamples: [],
+                            toolsContext: { canPerformToolCalls: false },
+                            recordedTokenCounts: {},
+                        },
+                    },
+                });
+
+                await new Promise((resolve) => job.once('completed', resolve));
+                expect(interceptionPayloads).toHaveLength(0);
+            } finally {
+                if (previousPluginFlag === undefined) {
+                    delete process.env.SILLYTAVERN_CORE_GENERATION_PLUGININTERCEPTIONENABLED;
+                } else {
+                    process.env.SILLYTAVERN_CORE_GENERATION_PLUGININTERCEPTIONENABLED = previousPluginFlag;
+                }
+            }
+        });
+
         test('Does not settle a completed job into a different active chat', async () => {
             const gateway = async (_req, res) => {
                 res.send({ choices: [{ message: { content: 'chat A response' } }] });

@@ -484,6 +484,7 @@ export function createSyntheticRequest(job, originalReq = {}) {
     delete body.characterName;
     delete body.core_state_version;
     delete body.core_prompt_ready_handled;
+    delete body.core_prompt_interception;
     delete body.core_prompt_context;
     delete body.core_prompt_metadata;
 

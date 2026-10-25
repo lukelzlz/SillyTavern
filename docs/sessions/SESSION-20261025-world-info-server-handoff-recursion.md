@@ -23,6 +23,8 @@ status: tested
 7. 服务端 PromptAssembler 已将 canonical World Info 的 ANTop/ANBottom 结果围绕 active Author's Note 重建，避免依赖浏览器动态副本。
 8. 服务端 PromptAssembler 已将 canonical World Info 的 EMTop/EMBottom 结果接入 `dialogueExamples` 拓扑，并保持 dialogue examples 前后顺序。
 9. 浏览器 server_context 能力判定不再强制依赖插件拦截开关；无插件时可直接走服务端 PromptAssembler，有插件时再进入可选拦截握手。
+10. server_context 请求不再在浏览器重复执行最终 Prompt 组装与 token 预算计算，浏览器只生成 canonical context envelope，服务端负责权威 Prompt。
+11. server_context 会携带浏览器是否存在 `CHAT_COMPLETION_PROMPT_READY` 监听器；无监听器时服务端跳过拦截等待，有监听器时才启用 WS 拦截握手。
 
 ## 验证记录
 
@@ -35,6 +37,8 @@ status: tested
 - 上一轮完整回归：`cd tests && npm run test:unit` 通过，28 suites / 591 tests。
 - 本轮 EM 与 server-owned gateway 增量：`npm run lint` 通过；`cd tests && npm run test:unit -- world-info-parity.test.js prompt-parity.test.js --runInBand` 通过，47 tests；`cd tests && npm run test:unit -- generation-orchestrator.test.js --runInBand` 通过，50 tests。
 - 本轮完整回归：`cd tests && npm run test:unit` 通过，28 suites / 593 tests。
+- 本轮 server_context 闭环增量：`npm run lint` 通过；`cd tests && npm run test:unit -- core-bridge.test.js generation-orchestrator.test.js --runInBand` 通过，62 tests。
+- 本轮完整回归：`cd tests && npm run test:unit` 通过，28 suites / 594 tests。
 
 ## 未完成与下一阶段
 

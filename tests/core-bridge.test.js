@@ -174,9 +174,14 @@ describe('Core P0 Security Bleeding Controls', () => {
         expect(content).toContain('generate_data.core_prompt_mode = promptMode');
         expect(content).toContain("promptMode === 'server_context'");
         expect(content).toContain('core_prompt_context');
+        expect(content).toContain('core_prompt_interception');
+        expect(content).toContain('hasPromptReadyListeners');
         expect(content).toContain('getCorePromptHandoffMode');
         expect(content).toContain('worldInfoEntries');
         expect(content).toContain('serverOwnsPrompt');
+        expect(content).toContain('serverContextOwnsPrompt');
+        expect(content).toContain('Avoid rebuilding the final prompt');
+        expect(content).toContain('serverOwnsPrompt\n                ? {}');
         expect(content).toContain('core_request_id');
         expect(content).toContain("coreBridge?.capabilities?.browserPromptHandoff === true");
         expect(content).toContain("coreBridge?.capabilities?.serverPromptAssembly === true");

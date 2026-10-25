@@ -523,6 +523,7 @@ export class JobManager extends EventEmitter {
         if (pluginInterceptionEnabled
             && promptMode !== 'client_final'
             && !job.requestBody?.core_prompt_ready_handled
+            && job.requestBody?.core_prompt_interception !== false
             && this.wsBridge
             && Array.isArray(job.requestBody?.messages)) {
             try {
