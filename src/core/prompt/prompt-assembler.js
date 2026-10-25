@@ -131,7 +131,12 @@ export class PromptAssembler {
                     ...(worldInfo.globalScanData || {}),
                 },
                 extensionPrompts: extPrompts,
-                options: worldInfo.options || {},
+                options: {
+                    ...(worldInfo.options || {}),
+                    ...(worldInfo.options?.budget > 0
+                        ? { tokenizer: (text) => tokenizer.countSync({ content: text }) }
+                        : {}),
+                },
             });
 
             worldInfo = {

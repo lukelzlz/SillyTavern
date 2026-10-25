@@ -38,6 +38,7 @@ import {
 import {
     world_info,
     getWorldInfoPrompt,
+    getSortedEntries,
     getWorldInfoSettings,
     setWorldInfoSettings,
     world_names,
@@ -46,6 +47,10 @@ import {
     setWorldInfoButtonClass,
     wi_anchor_position,
     world_info_include_names,
+    world_info_budget,
+    world_info_case_sensitive,
+    world_info_match_whole_words,
+    world_info_max_recursion_steps,
     initWorldInfo,
     charUpdatePrimaryWorld,
     charSetAuxWorlds,
@@ -5311,6 +5316,14 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 jsonSchema,
                 canPerformToolCalls,
             });
+            let serverWorldInfoEntries = null;
+            if (requestedCorePromptMode === 'server_context') {
+                try {
+                    serverWorldInfoEntries = await getSortedEntries();
+                } catch (error) {
+                    console.warn('[Core Bridge] Failed to collect World Info entries for server prompt assembly:', error);
+                }
+            }
             let [prompt, counts, preparedCorePromptContext, preparedCorePromptMode] = await prepareOpenAIMessages({
                 name2: name2,
                 charDescription: description,
@@ -5319,6 +5332,17 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 scenario: scenario,
                 worldInfoBefore: worldInfoBefore,
                 worldInfoAfter: worldInfoAfter,
+                worldInfoEntries: serverWorldInfoEntries,
+                worldInfoGlobalScanData: globalScanData,
+                worldInfoOptions: {
+                    budget: Math.max(0, Math.round(Number(world_info_budget || 0) * this_max_context / 100)),
+                    caseSensitive: Boolean(world_info_case_sensitive),
+                    matchWholeWords: Boolean(world_info_match_whole_words),
+                    ...(Number(world_info_max_recursion_steps) > 0
+                        ? { maxRecursionSteps: Number(world_info_max_recursion_steps) }
+                        : {}),
+                    trigger: globalScanData.trigger,
+                },
                 extensionPrompts: extension_prompts,
                 bias: promptBias,
                 type: type,

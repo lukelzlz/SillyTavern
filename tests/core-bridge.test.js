@@ -175,8 +175,14 @@ describe('Core P0 Security Bleeding Controls', () => {
         expect(content).toContain("promptMode === 'server_context'");
         expect(content).toContain('core_prompt_context');
         expect(content).toContain('getCorePromptHandoffMode');
+        expect(content).toContain('worldInfoEntries');
         expect(content).toContain('serverOwnsPrompt');
         expect(content).toContain('core_request_id');
+
+        const scriptPath = path.resolve(process.cwd(), '../public/script.js');
+        const scriptContent = fs.readFileSync(scriptPath, 'utf8');
+        expect(scriptContent).toContain('getSortedEntries');
+        expect(scriptContent).toContain('worldInfoGlobalScanData');
     });
 
     test('openai.js exposes a canonical browser prompt context serializer', () => {
