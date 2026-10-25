@@ -318,6 +318,64 @@ describe('Prompt Parity Phase 1: 8 Golden Fixture Differential Tests', () => {
             { role: 'system', content: 'Additional lore:\n{{outlet::lore}}' },
         ]));
     });
+
+    test('Server-owned World Info rebuilds Author\'s Note slots around the active note', async () => {
+        const output = await PromptAssembler.assemble({
+            settings: {
+                source: 'openai',
+                maxContext: 1000,
+                maxTokens: 100,
+                newChatPrompt: '[Chat begins]',
+            },
+            generationControl: { type: 'normal', dryRun: false },
+            characterContext: { name2: 'Seraphina' },
+            worldInfo: {
+                entries: [
+                    {
+                        uid: 'an-before',
+                        key: ['clocktower'],
+                        position: 2,
+                        order: 20,
+                        content: 'World Info before the Author\'s Note.',
+                    },
+                    {
+                        uid: 'an-after',
+                        key: ['clocktower'],
+                        position: 3,
+                        order: 10,
+                        content: 'World Info after the Author\'s Note.',
+                    },
+                ],
+                options: { budget: 0 },
+            },
+            promptOrder: ['main', 'authorsNote', 'chatHistory'],
+            prompts: [{
+                identifier: 'authorsNote',
+                role: 'system',
+                content: 'Base Author\'s Note.',
+            }],
+            extensionPrompts: {},
+            chatHistory: [{ role: 'user', content: 'The clocktower is humming.' }],
+            messageExamples: [],
+            toolsContext: { canPerformToolCalls: false },
+            recordedTokenCounts: {},
+        }, {
+            tokenizer: new DualTrackTokenizer({
+                tokenizer: createPromptTokenizer({ source: 'openai', model: 'gpt-4o' }),
+            }),
+        });
+
+        expect(output.chat).toEqual(expect.arrayContaining([
+            {
+                role: 'system',
+                content: [
+                    'World Info before the Author\'s Note.',
+                    'Base Author\'s Note.',
+                    'World Info after the Author\'s Note.',
+                ].join('\n'),
+            },
+        ]));
+    });
 });
 
 describe('Prompt Parity: Dual-Track Tokenizer & Fail-Closed Guardrails', () => {

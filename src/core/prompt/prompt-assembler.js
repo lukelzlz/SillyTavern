@@ -315,6 +315,22 @@ export class PromptAssembler {
             }
         }
 
+        // World Info AN entries are rebuilt on the server around the active
+        // Author's Note prompt. The authenticated bridge path returns empty
+        // browser-side AN slots, so this keeps the server as the sole owner of
+        // the dynamic prefix/suffix instead of appending a stale copy.
+        if (worldInfoScan && basePromptsMap.has('authorsNote')) {
+            const authorsNote = basePromptsMap.get('authorsNote');
+            if (typeof authorsNote.content === 'string') {
+                const authorNoteParts = [
+                    ...(worldInfoScan.ANBeforeEntries || []),
+                    authorsNote.content,
+                    ...(worldInfoScan.ANAfterEntries || []),
+                ].filter((part) => typeof part === 'string' && part.trim().length > 0);
+                authorsNote.content = authorNoteParts.join('\n');
+            }
+        }
+
         // Apply character overrides
         if (charCtx.systemPromptOverride && basePromptsMap.has('main')) {
             const mainPrompt = basePromptsMap.get('main');
