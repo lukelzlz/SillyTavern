@@ -375,6 +375,9 @@ export class GenerationJob extends EventEmitter {
             coreRequestId: typeof this.requestBody?.core_request_id === 'string'
                 ? this.requestBody.core_request_id
                 : null,
+            coreGenerationJobId: typeof this.requestBody?.core_generation_job_id === 'string'
+                ? this.requestBody.core_generation_job_id
+                : null,
             promptMode: this.requestBody?.core_prompt_mode || null,
             status: this.status,
             createdAt: this.createdAt,

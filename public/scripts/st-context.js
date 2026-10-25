@@ -133,7 +133,19 @@ async function bindCurrentCoreState(options = {}) {
             // not merely mutate their chat array in the background.
             if (!streamingProcessor && (change.type === 'snapshot'
                 || (change.type === 'patch' && change.operation !== 'generationState'))) {
-                printMessages().catch(error => console.warn('[Core Bridge] Failed to render chat projection:', error));
+                printMessages()
+                    .then(() => {
+                        const activeJob = coreBridge.activeGenerationJob;
+                        if (activeJob && remoteGenerationProjection && !streamingProcessor
+                            && isRemoteGenerationForCurrentChat(activeJob)) {
+                            renderRemoteGenerationText(
+                                remoteGenerationProjection,
+                                activeJob,
+                                activeJob.fullText || '',
+                            );
+                        }
+                    })
+                    .catch(error => console.warn('[Core Bridge] Failed to render chat projection:', error));
             }
         },
         onGenerationState: (generationState) => {
@@ -151,16 +163,175 @@ async function bindCurrentCoreState(options = {}) {
         },
         ...options,
     });
+
+    // A refreshed tab has no local StreamingProcessor, but it can still take
+    // over the server-owned stream. Start this only after the state identity is
+    // bound so a stale active job cannot render into the wrong chat.
+    ensureRemoteGenerationProjection(coreBridge.activeGenerationJob);
 }
 
 let coreLifecycleSyncInstalled = false;
 let pendingCoreStateSync = null;
+let remoteGenerationProjection = null;
+
+function sameCoreIdentity(left, right) {
+    return (left == null && right == null) || String(left) === String(right);
+}
+
+function isRemoteGenerationForCurrentChat(job) {
+    const binding = coreBridge.stateBinding;
+    if (!binding || !job) {
+        return false;
+    }
+
+    return sameCoreIdentity(job.chatId, binding.snapshotMeta.chatId)
+        && sameCoreIdentity(job.characterId, binding.snapshotMeta.characterId);
+}
+
+function getRemoteGenerationMarker(job) {
+    return job?.coreGenerationJobId
+        || job?.core_generation_job_id
+        || `core-job-${job?.jobId}`;
+}
+
+function createRemoteGenerationMessage(job, marker) {
+    return {
+        name: job.characterName || characters[this_chid]?.name || name2,
+        is_user: false,
+        is_system: false,
+        send_date: new Date(job.createdAt || Date.now()).toISOString(),
+        gen_started: new Date(job.createdAt || Date.now()).toISOString(),
+        gen_finished: new Date().toISOString(),
+        mes: '...',
+        extra: {
+            core_generation_job_id: marker,
+            reasoning: '',
+            reasoning_duration: null,
+        },
+        swipe_id: 0,
+        swipes: ['...'],
+        swipe_info: [],
+    };
+}
+
+function renderRemoteGenerationText(projection, job, text) {
+    if (projection.cancelled || remoteGenerationProjection !== projection) {
+        return;
+    }
+
+    const messageIndex = chat.findLastIndex((message) => message?.extra?.core_generation_job_id === projection.marker);
+    if (messageIndex < 0) {
+        const message = createRemoteGenerationMessage(job, projection.marker);
+        message.mes = text || message.mes;
+        message.swipes[0] = message.mes;
+        chat.push(message);
+        projection.messageId = chat.length - 1;
+        addOneMessage(message, { scroll: true });
+        return;
+    }
+
+    projection.messageId = messageIndex;
+    const message = chat[messageIndex];
+    message.mes = text || message.mes;
+    message.gen_finished = new Date().toISOString();
+    message.swipes ??= [message.mes];
+    message.swipes[message.swipe_id ?? 0] = message.mes;
+    updateMessageBlock(messageIndex, message);
+}
+
+async function refreshAndPersistRemoteGeneration() {
+    await coreBridge.refreshBoundState();
+    if (coreBridge.stateBinding?.generationState === 'idle') {
+        // The local processor is absent after a refresh, so no native save is
+        // emitted by onFinishStreaming. Persist the authoritative settled
+        // snapshot once, using the same marker-based replacement semantics.
+        await saveChatConditional();
+    }
+}
+
+/**
+ * Projects a server-owned generation into a refreshed tab without creating a
+ * second provider request or saving a second assistant message. The server
+ * state patch remains authoritative when the job settles.
+ * @param {object|null} job
+ * @returns {Promise<void>|undefined}
+ */
+async function followRemoteGeneration(job) {
+    const projection = remoteGenerationProjection;
+    if (!projection || projection.jobId !== job?.jobId) {
+        return;
+    }
+
+    try {
+        for await (const item of coreBridge.followGeneration(projection.jobId, { timeoutMs: 5000 })) {
+            if (projection.cancelled || remoteGenerationProjection !== projection) {
+                continue;
+            }
+
+            if (item.event === 'generation:token') {
+                const text = typeof item.data?.fullText === 'string' ? item.data.fullText : '';
+                if (!text && projection.messageId === null) {
+                    continue;
+                }
+                renderRemoteGenerationText(projection, job, text);
+            }
+        }
+
+        // Completion is settled through the server state patch. Refresh once
+        // more for the race where the terminal event wins the browser socket.
+        if (!projection.cancelled && remoteGenerationProjection === projection) {
+            await refreshAndPersistRemoteGeneration();
+        }
+    } catch (error) {
+        if (!projection.cancelled && remoteGenerationProjection === projection) {
+            // FAILED rolls back the marker; ABORTED/COMPLETED may settle it.
+            // The authoritative snapshot handles all three outcomes without a
+            // local save or a duplicate MESSAGE_RECEIVED event.
+            console.warn('[Core Bridge] Remote generation projection ended:', error);
+            await refreshAndPersistRemoteGeneration().catch(() => {});
+        }
+    } finally {
+        if (remoteGenerationProjection === projection) {
+            remoteGenerationProjection = null;
+        }
+    }
+}
+
+function ensureRemoteGenerationProjection(job) {
+    if (!job || !job.jobId || streamingProcessor || !isRemoteGenerationForCurrentChat(job)) {
+        if (remoteGenerationProjection && (!job || !isRemoteGenerationForCurrentChat(job))) {
+            remoteGenerationProjection.cancelled = true;
+            remoteGenerationProjection = null;
+        }
+        return;
+    }
+
+    if (remoteGenerationProjection?.jobId === job.jobId) {
+        return;
+    }
+
+    if (remoteGenerationProjection) {
+        remoteGenerationProjection.cancelled = true;
+    }
+
+    remoteGenerationProjection = {
+        jobId: job.jobId,
+        marker: getRemoteGenerationMarker(job),
+        messageId: null,
+        cancelled: false,
+    };
+    followRemoteGeneration(job).catch((error) => {
+        console.warn('[Core Bridge] Failed to follow refreshed generation:', error);
+    });
+}
 
 function installCoreLifecycleSync() {
     if (coreLifecycleSyncInstalled) {
         return;
     }
     coreLifecycleSyncInstalled = true;
+
+    eventSource.on('generation:active', (job) => ensureRemoteGenerationProjection(job));
 
     const sync = () => bindCurrentCoreState().catch((error) => {
         // The bridge is optional and disabled by default. A failed sync must

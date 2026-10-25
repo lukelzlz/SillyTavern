@@ -135,13 +135,18 @@ describe('Generation Orchestrator & Server Job Manager Test Suite', () => {
             expect(catchup.hasMissedChunks).toBe(true);
         });
 
-        test('toJSON produces sanitized serializable snapshot', () => {
-            const job = new GenerationJob({ userId: 'alice', chatId: 'chat_1' });
+        test('toJSON exposes the browser generation marker for refreshed-tab settlement', () => {
+            const job = new GenerationJob({
+                userId: 'alice',
+                chatId: 'chat_1',
+                requestBody: { core_generation_job_id: 'core-browser-job' },
+            });
             job.appendChunk('hi');
             const json = job.toJSON();
             expect(json.id).toBe(job.id);
             expect(json.userId).toBe('alice');
             expect(json.chatId).toBe('chat_1');
+            expect(json.coreGenerationJobId).toBe('core-browser-job');
             expect(json.fullText).toBe('hi');
             expect(json.lastSeq).toBe(1);
             expect(typeof json.createdAt).toBe('number');
