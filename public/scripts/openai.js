@@ -3464,6 +3464,7 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null, co
             delete generate_data.characterId;
             delete generate_data.characterName;
             delete generate_data.core_prompt_ready_handled;
+            delete generate_data.core_prompt_interception;
             delete generate_data.core_prompt_context;
         } else {
             const bridgedStream = async function* () {

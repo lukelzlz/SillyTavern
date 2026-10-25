@@ -28,6 +28,7 @@ status: tested
 12. 新增 `GF-PROMPT-09-world-info-all-slots` browser/server golden differential fixture，覆盖八种 World Info 槽位、PromptManager 顺序、examples、Author's Note、outlet、depth 与 stale browser 内容覆盖。
 13. 新增 authenticated Core WS `server_context` 真实生成链路测试，验证 WebSocket → JobManager → PromptAssembler → gateway → generation:completed 全链路。
 14. 新增 authenticated Core WS `server_context` + plugin interception 回归测试，验证拦截握手不会重复注入 canonical World Info 的 before、Author's Note、outlet 槽位，也不会把 stale browser 槽位带入 gateway。
+15. 新增真实浏览器 E2E `CorePromptHandoff.e2e.js`，验证 `prepareOpenAIMessages()` 在 server-owned 模式跳过浏览器最终组装，在不安全上下文与显式 client-owned 模式下各只执行一次本地 hook，并验证 Core transport 失败时 HTTP fallback 清理全部 Core 专用字段。
 
 ## 验证记录
 
@@ -46,8 +47,11 @@ status: tested
 - 本轮完整回归：`cd tests && npm run test:unit` 通过，28 suites / 596 tests。
 - 本轮 authenticated WS interception parity 增量：`npm run lint` 通过；`cd tests && npm run test:unit -- generation-orchestrator.test.js --runInBand` 通过，53 tests；`cd tests && npm run test:unit -- prompt-parity.test.js generation-orchestrator.test.js --runInBand` 通过，86 tests。
 - 本轮完整回归：`cd tests && npm run test:unit` 通过，28 suites / 597 tests。
+- 本轮 browser prompt ownership/fallback 增量：`npm run lint` 通过；`npx eslint frontend/CorePromptHandoff.e2e.js` 通过；启动本地服务后 `npx playwright test frontend/CorePromptHandoff.e2e.js --config=playwright.config.js` 通过，1 test；首次 E2E 暴露 `core_prompt_interception` 未在 HTTP fallback 清理的问题，已修复并复测通过。
+- 本轮针对性单测：`cd tests && npm run test:unit -- core-bridge.test.js generation-orchestrator.test.js prompt-parity.test.js --runInBand` 通过，3 suites / 97 tests。
+- 本轮完整回归：`cd tests && npm run test:unit` 通过，28 suites / 597 tests。
 
 ## 未完成与下一阶段
 
-- 本阶段的 browser/server 完整 World Info slot differential fixture 与真实 Core WS `server_context` interception 无重复注入验证均已完成。
-- 下一阶段应继续沿 Core prompt handoff 主线扩展边界测试，优先覆盖浏览器 `prepareOpenAIMessages` 实际运行路径与 server-owned prompt 的唯一所有权，不回退到重复的浏览器最终 Prompt 组装。
+- 本阶段的 browser/server 完整 World Info slot differential fixture、真实 Core WS `server_context` interception 无重复注入验证，以及浏览器 `prepareOpenAIMessages()` ownership/fallback 路径均已完成。
+- 下一阶段应继续沿 Core prompt handoff 主线接入真实 authenticated Core WS 浏览器链路，验证 capability 开启后的服务端生成、插件拦截与 HTTP rollback，再推进生成中断线重连与 catch-up。
