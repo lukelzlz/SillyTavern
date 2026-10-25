@@ -39,7 +39,10 @@ export class BridgeClient {
     }
 
     init() {
-        this.connect();
+        // The client is imported through script.js and st-context.js, which
+        // form a deliberate module cycle. Defer the first read of script.js
+        // exports until the module graph has finished initialization.
+        queueMicrotask(() => this.connect());
     }
 
     getWsUrl() {
