@@ -11,6 +11,12 @@ async function finishOnboarding(page) {
     }
 }
 
+async function abortTestJob(page, jobId) {
+    if (jobId && !page.isClosed()) {
+        await page.evaluate(id => window.coreBridge.abortGeneration(id), jobId).catch(() => {});
+    }
+}
+
 test.describe('Real Core prompt handoff transport', () => {
     test.beforeEach(async ({ page }) => {
         await testSetup.awaitST({ page });
@@ -193,5 +199,73 @@ test.describe('Real Core prompt handoff transport', () => {
         expect(result.stopped).toBe(true);
         expect(result.streamError).toMatch(/aborted|closed|clicked stop button/i);
         expect(result.activeGenerationJob).toBeNull();
+    });
+
+    test('a refreshed second tab stops the authenticated job and both tabs return to idle', async ({ page, context, request, handoff }) => {
+        const observer = await context.newPage();
+        const bindProjection = async (target) => {
+            await finishOnboarding(target);
+            await target.waitForFunction(() => window.coreBridge?.isReady === true);
+            await target.evaluate(async () => {
+                const { getContext } = await import('/scripts/st-context.js');
+                await getContext().bindCoreState({ bootstrap: false });
+            });
+        };
+        await testSetup.awaitST({ page: observer });
+        await bindProjection(page);
+        await bindProjection(observer);
+        await request.post(`${handoff.providerUrl}/control/block`);
+        let jobId;
+        try {
+            jobId = await page.evaluate(async (providerUrl) => {
+                const { jobId, stream } = await window.coreBridge.startGenerationStream({
+                    core_prompt_mode: 'client_final',
+                    messages: [{ role: 'user', content: 'Wait for another tab to stop this task.' }],
+                    chat_completion_source: 'openai',
+                    model: 'gpt-4o',
+                    stream: true,
+                    reverse_proxy: `${providerUrl}/v1`,
+                    proxy_password: 'test-only',
+                });
+                window.testJobResult = (async () => {
+                    try {
+                        const chunks = [];
+                        for await (const item of stream) chunks.push(item.data.fullText);
+                        return { chunks };
+                    } catch (error) {
+                        return { error: error.message };
+                    }
+                })();
+                return jobId;
+            }, handoff.providerUrl);
+            await expect.poll(async () => (await (await request.get(`${handoff.providerUrl}/health`)).json()).pending).toBe(1);
+            await expect(observer.locator('body')).toHaveAttribute('data-generating', 'true');
+            await observer.reload();
+            await observer.waitForFunction(() => !document.getElementById('preloader'));
+            await bindProjection(observer);
+
+            const restored = await observer.evaluate(() => ({
+                job: window.coreBridge.activeGenerationJob,
+                streaming: window.SillyTavern.getContext().streamingProcessor !== null,
+            }));
+            expect(restored.job).toMatchObject({ id: jobId, jobId, status: 'STREAMING' });
+            expect(restored.streaming).toBe(false);
+            await expect(observer.locator('#mes_stop')).toBeVisible();
+            await observer.locator('#mes_stop').click();
+
+            await expect.poll(async () => (await page.evaluate(id => window.coreBridge.getGenerationJob(id), jobId)).job.status).toBe('ABORTED');
+            await expect.poll(async () => (await (await request.get(`${handoff.providerUrl}/health`)).json()).pending).toBe(0);
+            await expect(page.locator('body')).not.toHaveAttribute('data-generating', 'true');
+            await expect(observer.locator('body')).not.toHaveAttribute('data-generating', 'true');
+            await expect.poll(() => page.evaluate(() => window.coreBridge.activeGenerationJob)).toBeNull();
+            await expect.poll(() => observer.evaluate(() => window.coreBridge.activeGenerationJob)).toBeNull();
+            await expect(page.locator('#mes_stop')).toBeHidden();
+            await expect(observer.locator('#mes_stop')).toBeHidden();
+            expect(await page.evaluate(() => window.testJobResult)).toEqual({ error: 'Clicked stop button' });
+        } finally {
+            await abortTestJob(page, jobId);
+            await request.post(`${handoff.providerUrl}/control/release`).catch(() => {});
+            await observer.close().catch(() => {});
+        }
     });
 });

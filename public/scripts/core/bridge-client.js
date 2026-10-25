@@ -277,6 +277,11 @@ export class BridgeClient {
             if (msg.type === 'handshake') {
                 console.log('[Core Bridge] Handshake complete:', msg.summary);
                 this.capabilities = msg.capabilities || {};
+                // Job snapshots use id; live events and UI controls use jobId.
+                // Normalize at the boundary before exposing readiness or recovering streams.
+                const jobId = [msg.activeJob?.jobId, msg.activeJob?.id]
+                    .find(id => typeof id === 'string' && id.trim().length > 0);
+                this.activeGenerationJob = jobId ? { ...msg.activeJob, jobId } : null;
                 this.isReady = true;
                 this.connectionState = 'READY';
                 for (const waiter of this.readyWaiters.splice(0)) {
@@ -286,7 +291,6 @@ export class BridgeClient {
                 this.recoverGenerationListeners().catch((error) => {
                     console.warn('[Core Bridge] Failed to recover generation streams after handshake:', error);
                 });
-                this.activeGenerationJob = msg.activeJob || null;
                 if (this.activeGenerationJob && eventSource && typeof eventSource.emit === 'function') {
                     await eventSource.emit('generation:active', this.activeGenerationJob);
                 }
