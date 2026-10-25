@@ -121,7 +121,9 @@ export class PromptAssembler {
         if (Array.isArray(worldInfo.entries)) {
             worldInfoScan = await CanonicalWorldInfoScanner.scan({
                 entries: worldInfo.entries,
-                chatMessages: chatHistory,
+                // The server contract stores chat history chronologically,
+                // while World Info scans the newest messages first.
+                chatMessages: [...chatHistory].reverse(),
                 globalScanData: {
                     trigger: genControl.type,
                     personaDescription: charCtx.personaDescription || '',

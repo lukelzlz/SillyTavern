@@ -146,6 +146,38 @@ describe('World Info Phase 1: Canonical Parity & Golden Fixtures Differential Te
 
             await expect(CanonicalWorldInfoScanner.scan(scanInput)).rejects.toThrow(TokenizerUnavailableError);
         });
+
+        test('Unlimited World Info budget does not require a tokenizer', async () => {
+            const output = await CanonicalWorldInfoScanner.scan({
+                entries: [{ uid: 'unlimited', key: ['signal'], content: 'Signal activated.', position: 0 }],
+                chatMessages: ['signal'],
+                options: { budget: 0 },
+            });
+
+            expect(output.activatedEntryUids).toEqual(['unlimited']);
+            expect(output.worldInfoBefore).toBe('Signal activated.');
+        });
+
+        test('Global case sensitivity and recursive activation are deterministic', async () => {
+            const caseSensitiveMiss = await CanonicalWorldInfoScanner.scan({
+                entries: [{ uid: 'case-sensitive', key: ['Signal'], content: 'Matched.', position: 0 }],
+                chatMessages: ['signal'],
+                options: { budget: 0, caseSensitive: true },
+            });
+            expect(caseSensitiveMiss.activatedEntryUids).toEqual([]);
+
+            const recursive = await CanonicalWorldInfoScanner.scan({
+                entries: [
+                    { uid: 'root', key: ['artifact'], content: 'The artifact reveals the hidden order.', position: 0, order: 10 },
+                    { uid: 'cascade', key: ['hidden order'], content: 'The hidden order guards the gate.', position: 0, order: 20 },
+                ],
+                chatMessages: ['An artifact was found.'],
+                options: { budget: 0, maxRecursionSteps: 3 },
+            });
+
+            expect(recursive.activatedEntryUids).toEqual(['root', 'cascade']);
+            expect(recursive.debugTrace.evaluationSteps.some(step => step.recursionPass === 1 && step.uid === 'cascade')).toBe(true);
+        });
     });
 
     // 3. Strict Compliance Guard: Character-count Heuristic Ban (ADR-003)

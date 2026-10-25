@@ -90,3 +90,4 @@ node server.js
 | 2026-10-20 / PROPOSAL-003 | Spec | 服务端 World Info 语义对齐与金标差分契约 | `docs/proposals/PROPOSAL-003-world-info-parity-contract.md`, `docs/decisions/ADR-003-world-info-canonical-contract.md` | Accepted |
 | 2026-10-20 / PROPOSAL-004 | Spec | 服务端 Prompt 装配等价性纯数据契约与黄金差分 | `docs/proposals/PROPOSAL-004-prompt-parity-golden-contract.md`, `docs/decisions/ADR-004-prompt-parity-differential-testing.md` | Accepted |
 | 2026-10-20 / PROPOSAL-005 | Spec | 服务端生成编排器与后台常驻任务管理器 (锁屏断网续传) | `docs/proposals/PROPOSAL-005-generation-orchestrator.md`, `docs/decisions/ADR-005-generation-orchestrator.md` | Accepted |
+| 2026-10-25 / SESSION-20261025 | Session | Core World Info 服务端交接递归、大小写与 chronological scan parity 阶段推进 | `docs/sessions/SESSION-20261025-world-info-server-handoff-recursion.md` | Tested |

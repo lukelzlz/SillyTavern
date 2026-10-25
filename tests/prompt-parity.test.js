@@ -115,6 +115,52 @@ describe('Prompt Parity Phase 1: 8 Golden Fixture Differential Tests', () => {
         ]);
     });
 
+    test('Server-owned World Info scans newest chronological history first', async () => {
+        const output = await PromptAssembler.assemble({
+            settings: {
+                source: 'openai',
+                maxContext: 1000,
+                maxTokens: 100,
+                newChatPrompt: '[Chat begins]',
+            },
+            generationControl: { type: 'normal', dryRun: false },
+            characterContext: { name2: 'Seraphina' },
+            worldInfo: {
+                worldInfoBefore: 'stale browser value',
+                worldInfoAfter: '',
+                entries: [{
+                    uid: 'newest-only',
+                    key: ['newest signal'],
+                    scanDepth: 1,
+                    position: 0,
+                    content: 'Server World Info activated.',
+                }],
+                options: { budget: 0 },
+            },
+            promptOrder: ['main', 'worldInfoBefore', 'chatHistory'],
+            prompts: [],
+            extensionPrompts: {},
+            chatHistory: [
+                { role: 'user', content: 'Older message.' },
+                { role: 'user', content: 'Newest signal is present.' },
+            ],
+            messageExamples: [],
+            toolsContext: { canPerformToolCalls: false },
+            recordedTokenCounts: {},
+        }, {
+            tokenizer: new DualTrackTokenizer({
+                tokenizer: createPromptTokenizer({ source: 'openai', model: 'gpt-4o' }),
+            }),
+        });
+
+        expect(output.chat).toEqual(expect.arrayContaining([
+            { role: 'system', content: 'Server World Info activated.' },
+        ]));
+        expect(output.chat).not.toEqual(expect.arrayContaining([
+            { role: 'system', content: 'stale browser value' },
+        ]));
+    });
+
     test('Browser-shaped contexts can place an active custom prompt in the declared order', async () => {
         const fixture = loadFixture('GF-PROMPT-01-standard-chat.json');
         const input = structuredClone(fixture.input);
