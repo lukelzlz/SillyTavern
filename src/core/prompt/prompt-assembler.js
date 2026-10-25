@@ -73,6 +73,12 @@ export class PromptAssembler {
         if (vars.personality !== undefined) result = result.replace(/\{\{personality\}\}/gi, String(vars.personality));
         if (vars.lastChatMessage !== undefined) result = result.replace(/\{\{lastChatMessage\}\}/gi, String(vars.lastChatMessage));
 
+        const outlets = vars.outlets && typeof vars.outlets === 'object' ? vars.outlets : {};
+        result = result.replace(/\{\{outlet::(.+?)\}\}/gi, (_, key) => {
+            const value = outlets[String(key).trim()];
+            return Array.isArray(value) ? value.join('\n') : (value == null ? '' : String(value));
+        });
+
         // Unresolved standard placeholder
         result = result.replace(/<START>/gi, '---');
 
@@ -118,6 +124,9 @@ export class PromptAssembler {
         });
 
         let worldInfoScan = null;
+        let worldInfoOutlets = worldInfo.outletEntries && typeof worldInfo.outletEntries === 'object'
+            ? worldInfo.outletEntries
+            : {};
         if (Array.isArray(worldInfo.entries)) {
             worldInfoScan = await CanonicalWorldInfoScanner.scan({
                 entries: worldInfo.entries,
@@ -146,6 +155,9 @@ export class PromptAssembler {
                 worldInfoBefore: worldInfoScan.worldInfoBefore,
                 worldInfoAfter: worldInfoScan.worldInfoAfter,
             };
+            // Canonical server scans replace any browser-produced outlet copy,
+            // just as they replace stale worldInfoBefore/worldInfoAfter text.
+            worldInfoOutlets = worldInfoScan.outletEntries || {};
 
             const depthPrompts = (worldInfoScan.WIDepthEntries || []).flatMap((entry, index) => [{
                 identifier: `worldInfoDepth-${entry.depth}-${entry.role}-${index}`,
@@ -168,6 +180,7 @@ export class PromptAssembler {
             personality: charCtx.charPersonality || '',
             scenario: charCtx.scenario || '',
             persona: charCtx.personaDescription || '',
+            outlets: worldInfoOutlets,
         };
 
         // =====================================================================

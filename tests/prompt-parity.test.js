@@ -271,6 +271,53 @@ describe('Prompt Parity Phase 1: 8 Golden Fixture Differential Tests', () => {
         expect(output.chat.map((message) => message.content)).toContain('Temporal slips are caused by phase drift.');
         expect(output.metadata.worldInfoScan.activatedEntryUids).toEqual(['wi-before', 'wi-depth']);
     });
+
+    test('Server-owned World Info outlets resolve in prompt macros', async () => {
+        const output = await PromptAssembler.assemble({
+            settings: {
+                source: 'openai',
+                maxContext: 1000,
+                maxTokens: 100,
+                newChatPrompt: '[Chat begins]',
+            },
+            generationControl: { type: 'normal', dryRun: false },
+            characterContext: { name2: 'Seraphina' },
+            worldInfo: {
+                worldInfoBefore: 'stale browser value',
+                worldInfoAfter: '',
+                entries: [{
+                    uid: 'outlet-lore',
+                    key: ['clocktower'],
+                    position: 7,
+                    outletName: 'lore',
+                    content: 'The clocktower contains a crystal regulator.',
+                }],
+                options: { budget: 0 },
+            },
+            promptOrder: ['main', 'outletPrompt', 'chatHistory'],
+            prompts: [{
+                identifier: 'outletPrompt',
+                role: 'system',
+                content: 'Additional lore:\n{{outlet::lore}}',
+            }],
+            extensionPrompts: {},
+            chatHistory: [{ role: 'user', content: 'The clocktower is humming.' }],
+            messageExamples: [],
+            toolsContext: { canPerformToolCalls: false },
+            recordedTokenCounts: {},
+        }, {
+            tokenizer: new DualTrackTokenizer({
+                tokenizer: createPromptTokenizer({ source: 'openai', model: 'gpt-4o' }),
+            }),
+        });
+
+        expect(output.chat).toEqual(expect.arrayContaining([
+            { role: 'system', content: 'Additional lore:\nThe clocktower contains a crystal regulator.' },
+        ]));
+        expect(output.chat).not.toEqual(expect.arrayContaining([
+            { role: 'system', content: 'Additional lore:\n{{outlet::lore}}' },
+        ]));
+    });
 });
 
 describe('Prompt Parity: Dual-Track Tokenizer & Fail-Closed Guardrails', () => {
