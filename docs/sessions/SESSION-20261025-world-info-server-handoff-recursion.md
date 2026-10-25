@@ -49,4 +49,5 @@ status: tested
 
 ## 未完成与下一阶段
 
-- 仍需继续补齐 browser/server 的完整 World Info slot differential fixture，并在真实 Core WS handoff 流程中验证无重复注入。
+- 本阶段的 browser/server 完整 World Info slot differential fixture 与真实 Core WS `server_context` interception 无重复注入验证均已完成。
+- 下一阶段应继续沿 Core prompt handoff 主线扩展边界测试，优先覆盖浏览器 `prepareOpenAIMessages` 实际运行路径与 server-owned prompt 的唯一所有权，不回退到重复的浏览器最终 Prompt 组装。
