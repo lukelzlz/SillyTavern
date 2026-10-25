@@ -172,7 +172,7 @@ describe('Core P0 Security Bleeding Controls', () => {
         expect(content).toContain('core_generation_job_id');
         expect(content).toContain('core_prompt_ready_handled');
         expect(content).toContain('generate_data.core_prompt_mode = promptMode');
-        expect(content).toContain("promptMode === 'server_context'");
+        expect(content).toContain('promptMode === \'server_context\'');
         expect(content).toContain('core_prompt_context');
         expect(content).toContain('core_prompt_interception');
         expect(content).toContain('hasPromptReadyListeners');
@@ -183,8 +183,8 @@ describe('Core P0 Security Bleeding Controls', () => {
         expect(content).toContain('Avoid rebuilding the final prompt');
         expect(content).toContain('serverOwnsPrompt\n                ? {}');
         expect(content).toContain('core_request_id');
-        expect(content).toContain("coreBridge?.capabilities?.browserPromptHandoff === true");
-        expect(content).toContain("coreBridge?.capabilities?.serverPromptAssembly === true");
+        expect(content).toContain('coreBridge?.capabilities?.browserPromptHandoff === true');
+        expect(content).toContain('coreBridge?.capabilities?.serverPromptAssembly === true');
 
         const scriptPath = path.resolve(process.cwd(), '../public/script.js');
         const scriptContent = fs.readFileSync(scriptPath, 'utf8');
@@ -224,7 +224,7 @@ describe('Core P0 Security Bleeding Controls', () => {
 
         expect(content).toContain('this.isReady = false');
         expect(content).toContain('await this.waitUntilReady(timeoutMs);');
-        expect(content).toContain("this.connectionState = 'READY'");
+        expect(content).toContain('this.connectionState = \'READY\'');
     });
 
     test('bridge-client reconciles dirty state against a newer server snapshot after reconnect', () => {
