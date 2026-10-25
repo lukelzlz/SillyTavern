@@ -82,6 +82,7 @@ import { ToolManager } from './tool-calling.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { COMETAPI_IGNORE_PATTERNS, IGNORE_SYMBOL, MEDIA_DISPLAY, MEDIA_TYPE } from './constants.js';
 import { syncNanoGptProvidersForModel, syncOpenRouterProvidersForModel, updateNanoGptProvidersWarning, updateOpenRouterProvidersWarning } from './textgen-models.js';
+import { coreBridge } from './core/bridge-client.js';
 
 export {
     openai_messages_count,
@@ -3144,6 +3145,47 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
     const model = getChatCompletionModel(oai_settings);
     const { generate_data, stream, canMultiSwipe } = await createGenerationParameters(oai_settings, model, type, messages, { jsonSchema });
     await eventSource.emit(event_types.CHAT_COMPLETION_SETTINGS_READY, generate_data);
+
+    // Core transport is opt-in and disabled by default. When it is explicitly
+    // enabled, route the safe plain-text streaming subset through the server
+    // orchestrator so the upstream request survives browser disconnects.
+    const canUseCoreGeneration = stream
+        && coreBridge?.isConnected
+        && !canMultiSwipe
+        && !generate_data.tools
+        && !generate_data.json_schema
+        && !generate_data.include_reasoning
+        && !generate_data.request_images;
+
+    if (canUseCoreGeneration) {
+        const coreGenerationJobId = `core-${uuidv4()}`;
+        generate_data.core_generation_job_id = coreGenerationJobId;
+
+        const { stream: coreStream } = await coreBridge.startGenerationStream(
+            generate_data,
+            5000,
+            signal,
+        );
+
+        const bridgedStream = async function* () {
+            for await (const item of coreStream) {
+                yield {
+                    text: item.data?.fullText || '',
+                    swipes: [],
+                    logprobs: [],
+                    toolCalls: [],
+                    state: {
+                        reasoning: '',
+                        images: [],
+                        signature: '',
+                    },
+                };
+            }
+        };
+
+        bridgedStream.coreGenerationJobId = coreGenerationJobId;
+        return bridgedStream;
+    }
 
     const generate_url = '/api/backends/chat-completions/generate';
     const response = await fetch(generate_url, {

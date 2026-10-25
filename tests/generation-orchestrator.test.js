@@ -404,6 +404,46 @@ describe('Generation Orchestrator & Server Job Manager Test Suite', () => {
             expect(session.activeAbortController).toBeNull();
         });
 
+        test('Core generation marker reconciles an existing client placeholder without duplication', async () => {
+            const session = mockSessionEngine.getSession('alice');
+            const marker = 'core-client-generation-1';
+            session.syncFullState({
+                chat: [{
+                    name: 'Seraphina',
+                    is_user: false,
+                    is_system: false,
+                    mes: 'Partial client placeholder',
+                    extra: { core_generation_job_id: marker },
+                }],
+                metadata: {},
+            });
+
+            const gateway = async (_req, res) => {
+                await new Promise((resolve) => setTimeout(resolve, 10));
+                res.send({ choices: [{ message: { content: 'Final server result' } }] });
+            };
+
+            jobManager = new JobManager({
+                generateHandler: gateway,
+                sessionEngine: mockSessionEngine,
+                wsBridge: mockWsBridge,
+            });
+
+            const job = await jobManager.createJob({
+                userId: 'alice',
+                body: {
+                    characterName: 'Seraphina',
+                    core_generation_job_id: marker,
+                },
+            });
+
+            await new Promise((resolve) => job.on('completed', resolve));
+
+            expect(session.chat).toHaveLength(1);
+            expect(session.chat[0].mes).toBe('Final server result');
+            expect(session.chat[0].extra.core_generation_job_id).toBe(marker);
+        });
+
         test('Explicit abort cascades to AbortController, closes socket, and frees concurrency lock', async () => {
             let socketClosed = false;
             const longGateway = (req) => {

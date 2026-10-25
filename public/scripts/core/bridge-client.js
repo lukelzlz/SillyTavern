@@ -18,6 +18,9 @@ export class BridgeClient {
         /** @type {Map<string, { resolve: Function, reject: Function, timer: NodeJS.Timeout }>} */
         this.pendingJobRequests = new Map();
 
+        /** @type {Map<string, { enqueue: Function }>} */
+        this.generationListeners = new Map();
+
         /** @type {number} Number of server-originated events currently being projected. */
         this.remoteEventDepth = 0;
 
@@ -87,7 +90,7 @@ export class BridgeClient {
                         ? this.syncBoundState()
                         : this.stateBinding.serverInitialized
                             ? this.refreshBoundState()
-                            : this.bootstrapBoundState();
+                            : this.bootstrapOrRefreshBoundState();
                     syncPromise.catch((error) => {
                         console.warn('[Core Bridge] Failed to refresh bound state:', error);
                     });
@@ -171,6 +174,7 @@ export class BridgeClient {
             // 2. Event broadcast from server -> trigger local eventSource for extensions
             if (msg.type === 'event') {
                 const { event, data } = msg;
+                this.dispatchGenerationEvent(event, data);
                 await this.applyStateEvent(event, data);
                 if (eventSource && typeof eventSource.emit === 'function') {
                     // Transparently trigger local event listeners
@@ -240,7 +244,7 @@ export class BridgeClient {
 
         if (this.isConnected) {
             if (bootstrap) {
-                await this.bootstrapBoundState();
+                await this.bootstrapOrRefreshBoundState();
             } else {
                 await this.refreshBoundState();
             }
@@ -326,15 +330,30 @@ export class BridgeClient {
         }
 
         switch (patch.op) {
-            case 'append':
-                binding.chat.push(patch.message);
+            case 'append': {
+                const marker = patch.message?.extra?.core_generation_job_id;
+                const existingIndex = marker
+                    ? binding.chat.findLastIndex((message) => message?.extra?.core_generation_job_id === marker)
+                    : -1;
+                if (existingIndex >= 0) {
+                    binding.chat[existingIndex] = patch.message;
+                } else {
+                    binding.chat.push(patch.message);
+                }
                 break;
-            case 'update':
-                if (!Number.isInteger(patch.index) || patch.index < 0 || patch.index >= binding.chat.length) {
+            }
+            case 'update': {
+                const marker = patch.updates?.core_generation_job_id || patch.message?.extra?.core_generation_job_id;
+                const markerIndex = marker
+                    ? binding.chat.findLastIndex((message) => message?.extra?.core_generation_job_id === marker)
+                    : -1;
+                const index = markerIndex >= 0 ? markerIndex : patch.index;
+                if (!Number.isInteger(index) || index < 0 || index >= binding.chat.length) {
                     return false;
                 }
-                binding.chat[patch.index] = { ...binding.chat[patch.index], ...(patch.updates || patch.message || {}) };
+                binding.chat[index] = { ...binding.chat[index], ...(patch.updates || patch.message || {}) };
                 break;
+            }
             case 'delete':
                 if (!Number.isInteger(patch.index) || patch.index < 0 || patch.index >= binding.chat.length) {
                     return false;
@@ -413,6 +432,35 @@ export class BridgeClient {
         if (typeof binding.onSync === 'function') {
             binding.onSync({ type: 'bootstrap', version: binding.version });
         }
+    }
+
+    /**
+     * Chooses a safe initial synchronization direction. A non-empty server
+     * session for the same chat wins after a page refresh so a completed
+     * background generation cannot be overwritten by stale browser state.
+     * Empty/new server sessions still bootstrap from the currently loaded UI.
+     */
+    async bootstrapOrRefreshBoundState() {
+        const binding = this.stateBinding;
+        if (!binding || !this.isConnected) {
+            return;
+        }
+
+        const snapshot = await this.getStateSnapshot();
+        const sameIdentity = (left, right) => (left == null && right == null) || String(left) === String(right);
+        const sameCharacter = sameIdentity(snapshot?.characterId, binding.snapshotMeta.characterId);
+        const sameChat = sameIdentity(snapshot?.chatId, binding.snapshotMeta.chatId);
+        const serverHasState = Number(snapshot?.version) > 0
+            && sameCharacter
+            && sameChat
+            && Array.isArray(snapshot?.chat);
+
+        if (serverHasState) {
+            this.applyStateSnapshot(snapshot, snapshot.version);
+            return;
+        }
+
+        await this.bootstrapBoundState();
     }
 
     /**
@@ -530,6 +578,27 @@ export class BridgeClient {
     }
 
     /**
+     * Retrieves a generation job snapshot for reconnect/catch-up recovery.
+     * @param {string} jobId
+     * @param {number} [lastSeq=0]
+     * @returns {Promise<any>}
+     */
+    async getGenerationJob(jobId, lastSeq = 0) {
+        const query = new URLSearchParams({ lastSeq: String(Math.max(0, Number(lastSeq) || 0)) });
+        const response = await fetch(`/api/core/generation/jobs/${encodeURIComponent(jobId)}?${query.toString()}`, {
+            method: 'GET',
+            credentials: 'same-origin',
+            headers: { Accept: 'application/json' },
+        });
+
+        if (!response.ok) {
+            throw new Error(`[Core Bridge] Failed to retrieve generation job (${response.status})`);
+        }
+
+        return await response.json();
+    }
+
+    /**
      * Starts a server-side background generation job.
      * @param {Record<string, unknown>} payload
      * @param {number} [timeoutMs=5000]
@@ -537,6 +606,173 @@ export class BridgeClient {
      */
     startGeneration(payload = {}, timeoutMs = 5000) {
         return this.requestJobOperation('generate:start', payload, timeoutMs);
+    }
+
+    /**
+     * Starts a server-side job and returns an async stream compatible with the
+     * native StreamingProcessor. The server owns the upstream request; closing
+     * the browser connection does not abort it unless the caller's signal is
+     * explicitly aborted.
+     * @param {Record<string, unknown>} payload
+     * @param {number} [timeoutMs=5000]
+     * @param {AbortSignal|null} [signal=null]
+     * @returns {Promise<{ jobId: string, stream: AsyncGenerator }>}
+     */
+    async startGenerationStream(payload = {}, timeoutMs = 5000, signal = null) {
+        const created = await this.startGeneration(payload, timeoutMs);
+        if (!created?.jobId) {
+            throw new Error('[Core Bridge] Generation job did not return a job id');
+        }
+
+        return {
+            jobId: created.jobId,
+            stream: this.followGeneration(created.jobId, { timeoutMs, signal }),
+        };
+    }
+
+    /**
+     * Follows a server-side generation job, including the current snapshot so
+     * a reconnect does not lose text emitted before the listener was attached.
+     * @param {string} jobId
+     * @param {{ timeoutMs?: number, signal?: AbortSignal|null }} [options]
+     * @returns {AsyncGenerator<{ event: string, data: any }>}
+     */
+    followGeneration(jobId, { timeoutMs = 5000, signal = null } = {}) {
+        const client = this;
+        const state = {
+            queue: [],
+            waiters: [],
+            lastEmittedText: '',
+            terminal: false,
+        };
+
+        const enqueue = (event, data) => {
+            if (state.terminal) {
+                return;
+            }
+
+            const item = { event, data };
+            const waiter = state.waiters.shift();
+            if (waiter) {
+                waiter(item);
+            } else {
+                state.queue.push(item);
+            }
+        };
+
+        this.generationListeners.set(jobId, { enqueue });
+
+        const waitForEvent = () => {
+            if (state.queue.length > 0) {
+                return Promise.resolve(state.queue.shift());
+            }
+
+            return new Promise((resolve) => {
+                state.waiters.push(resolve);
+            });
+        };
+
+        const stream = (async function* () {
+            const abortHandler = () => {
+                client.abortGeneration(jobId, 'Client aborted generation', timeoutMs).catch(() => { });
+            };
+
+            if (signal) {
+                if (signal.aborted) {
+                    abortHandler();
+                } else {
+                    signal.addEventListener('abort', abortHandler, { once: true });
+                }
+            }
+
+            try {
+                const snapshot = await client.getGenerationJob(jobId, 0);
+                const job = snapshot?.job;
+
+                if (job?.fullText) {
+                    state.lastEmittedText = job.fullText;
+                    yield {
+                        event: 'generation:token',
+                        data: {
+                            jobId,
+                            seq: job.lastSeq || 0,
+                            delta: job.fullText,
+                            fullText: job.fullText,
+                        },
+                    };
+                }
+
+                if (job?.status === 'COMPLETED') {
+                    state.terminal = true;
+                    return;
+                }
+                if (job?.status === 'ABORTED') {
+                    state.terminal = true;
+                    throw new Error(job.abortReason || 'Generation aborted');
+                }
+                if (job?.status === 'FAILED') {
+                    state.terminal = true;
+                    throw new Error(job.error || 'Generation failed');
+                }
+
+                while (true) {
+                    const item = await waitForEvent();
+                    const data = item.data || {};
+
+                    if (item.event === 'generation:token') {
+                        if (!data.fullText || data.fullText === state.lastEmittedText) {
+                            continue;
+                        }
+                        state.lastEmittedText = data.fullText;
+                        yield item;
+                        continue;
+                    }
+
+                    if (item.event === 'generation:completed') {
+                        if (data.fullText && data.fullText !== state.lastEmittedText) {
+                            state.lastEmittedText = data.fullText;
+                            yield {
+                                event: 'generation:token',
+                                data: {
+                                    ...data,
+                                    delta: data.fullText,
+                                },
+                            };
+                        }
+                        state.terminal = true;
+                        return;
+                    }
+
+                    if (item.event === 'generation:aborted') {
+                        state.terminal = true;
+                        throw new Error(data.reason || 'Generation aborted');
+                    }
+
+                    if (item.event === 'generation:failed') {
+                        state.terminal = true;
+                        throw new Error(data.error || 'Generation failed');
+                    }
+                }
+            } finally {
+                if (signal) {
+                    signal.removeEventListener('abort', abortHandler);
+                }
+                client.generationListeners.delete(jobId);
+                for (const waiter of state.waiters.splice(0)) {
+                    waiter({ event: 'generation:failed', data: { error: 'Generation stream closed' } });
+                }
+            }
+        })();
+
+        return stream;
+    }
+
+    dispatchGenerationEvent(event, data) {
+        const jobId = data?.jobId;
+        const listener = jobId ? this.generationListeners.get(jobId) : null;
+        if (listener) {
+            listener.enqueue(event, data);
+        }
     }
 
     /**

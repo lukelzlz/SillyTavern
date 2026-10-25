@@ -166,6 +166,8 @@ describe('Core P0 Security Bleeding Controls', () => {
 
         expect(content).toContain('const generate_url = \'/api/backends/chat-completions/generate\';');
         expect(content).not.toContain('? \'/api/core/chat-completions/generate\'');
+        expect(content).toContain('coreBridge.startGenerationStream');
+        expect(content).toContain('core_generation_job_id');
     });
 
     test('openai.js restores native in-place CHAT_COMPLETION_PROMPT_READY event emission', () => {

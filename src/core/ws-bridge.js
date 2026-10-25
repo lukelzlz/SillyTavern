@@ -416,20 +416,22 @@ export class WebSocketBridge {
 
                 try {
                     const { jobManager } = await import('./generation/job-manager.js');
+                    const syntheticReq = {
+                        user: {
+                            profile: {
+                                handle: ws.userId,
+                                enabled: true,
+                            },
+                            directories: getUserDirectories(ws.userId),
+                        },
+                        headers: {},
+                        session: {},
+                    };
                     const job = await jobManager.createJob({
                         userId: ws.userId,
                         body: msg.payload || {},
-                        req: {
-                            user: {
-                                profile: {
-                                    handle: ws.userId,
-                                    enabled: true,
-                                },
-                                directories: getUserDirectories(ws.userId),
-                            },
-                            headers: {},
-                            session: {},
-                        },
+                        req: syntheticReq,
+                        deferStart: true,
                     });
                     ws.send(JSON.stringify({
                         type: 'job:created',
@@ -437,6 +439,7 @@ export class WebSocketBridge {
                         jobId: job.id,
                         state: job.status,
                     }));
+                    jobManager.startJob(job, syntheticReq);
                 } catch (err) {
                     ws.send(JSON.stringify({
                         type: 'job:failed',

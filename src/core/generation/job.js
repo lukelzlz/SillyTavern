@@ -97,6 +97,8 @@ export class GenerationJob extends EventEmitter {
 
         /** @type {AbortController} */
         this.abortController = new AbortController();
+        /** @type {boolean} */
+        this.executionStarted = false;
         /** @type {string|null} */
         this.abortReason = null;
         /** @type {string|null} */

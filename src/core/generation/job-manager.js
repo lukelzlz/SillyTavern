@@ -189,9 +189,10 @@ export class JobManager extends EventEmitter {
      * @param {string} [options.userId='default']
      * @param {object} [options.body={}]
      * @param {object} [options.req=null]
+     * @param {boolean} [options.deferStart=false]
      * @returns {Promise<GenerationJob>}
      */
-    async createJob({ userId = 'default', body = {}, req = null } = {}) {
+    async createJob({ userId = 'default', body = {}, req = null, deferStart = false } = {}) {
         const normalizedUser = String(userId || 'default');
 
         // Fail-Closed Concurrency Guard (Active Job Limit = 1)
@@ -220,15 +221,33 @@ export class JobManager extends EventEmitter {
 
         this._bindJobEvents(job);
 
-        // Start background execution daemon (unawaited by HTTP endpoint)
+        if (!deferStart) {
+            this.startJob(job, req);
+        }
+
+        return job;
+    }
+
+    /**
+     * Starts a previously created job. WS callers can defer this until after
+     * the creation response has been written, avoiding a fast-provider race.
+     * @param {GenerationJob} job
+     * @param {object} [req]
+     * @returns {boolean}
+     */
+    startJob(job, req = null) {
+        if (!job || job.executionStarted) {
+            return false;
+        }
+
+        job.executionStarted = true;
         this._executeJob(job, req).catch((err) => {
             console.error(`[JobManager] Error executing job ${job.id}:`, err);
             if (!job.isTerminal()) {
                 job.fail(err);
             }
         });
-
-        return job;
+        return true;
     }
 
     /**
@@ -462,13 +481,27 @@ export class JobManager extends EventEmitter {
 
             if (job.fullText && job.fullText.trim().length > 0) {
                 const characterName = job.characterName || session.activeCharacterName || 'Assistant';
-                session.appendMessage({
+                const generationMarker = typeof job.requestBody?.core_generation_job_id === 'string'
+                    ? job.requestBody.core_generation_job_id
+                    : null;
+                const message = {
                     name: characterName,
                     is_user: false,
                     is_system: false,
                     send_date: new Date().toISOString(),
                     mes: job.fullText,
-                });
+                    ...(generationMarker ? { extra: { core_generation_job_id: generationMarker } } : {}),
+                };
+
+                const existingIndex = generationMarker
+                    ? session.chat.findLastIndex((item) => item?.extra?.core_generation_job_id === generationMarker)
+                    : -1;
+
+                if (existingIndex >= 0) {
+                    session.updateMessage(existingIndex, message);
+                } else {
+                    session.appendMessage(message);
+                }
             }
 
             session.generationState = 'idle';

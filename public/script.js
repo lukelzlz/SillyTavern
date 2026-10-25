@@ -3583,6 +3583,8 @@ class StreamingProcessor {
         this.images = [];
         /** @type {string?} */
         this.reasoningSignature = null;
+        /** @type {string|null} */
+        this.coreGenerationJobId = null;
     }
 
     /**
@@ -3630,8 +3632,25 @@ class StreamingProcessor {
             this.sendTextarea.value = '';
             this.sendTextarea.dispatchEvent(new Event('input', { bubbles: true }));
         } else {
-            await saveReply({ type: this.type, getMessage: text, fromStreaming: true });
-            messageId = chat.length - 1;
+            const existingCoreMessage = this.coreGenerationJobId
+                ? chat.findLastIndex((message) => message?.extra?.core_generation_job_id === this.coreGenerationJobId)
+                : -1;
+
+            if (existingCoreMessage >= 0) {
+                messageId = existingCoreMessage;
+                const existingMessage = document.querySelector(`#chat .mes[mesid="${messageId}"]`);
+                if (!existingMessage) {
+                    addOneMessage(chat[messageId]);
+                }
+            } else {
+                await saveReply({
+                    type: this.type,
+                    getMessage: text,
+                    fromStreaming: true,
+                    coreGenerationJobId: this.coreGenerationJobId,
+                });
+                messageId = chat.length - 1;
+            }
             await this.#checkDomElements(messageId, continueOnReasoning);
             this.markUIGenStarted();
         }
@@ -5391,6 +5410,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             }
 
             streamingProcessor.generator = await sendStreamingRequest(type, generate_data, { jsonSchema });
+            streamingProcessor.coreGenerationJobId = streamingProcessor.generator?.coreGenerationJobId ?? null;
 
             hideSwipeButtons();
             let getMessage = await streamingProcessor.generate();
@@ -6639,7 +6659,7 @@ async function processImageAttachment(message, { imageUrls }) {
  * @property {string} type Type of generation
  * @property {string} getMessage Generated message
  */
-export async function saveReply({ type, getMessage, fromStreaming = false, title = '', swipes = [], reasoning = '', imageUrls = [], reasoningSignature = null }) {
+export async function saveReply({ type, getMessage, fromStreaming = false, title = '', swipes = [], reasoning = '', imageUrls = [], reasoningSignature = null, coreGenerationJobId = null }) {
     // Backward compatibility
     if (arguments.length > 1 && typeof arguments[0] !== 'object') {
         console.trace('saveReply called with positional arguments. Please use an object instead.');
@@ -6682,6 +6702,9 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
             lastMessage.extra.reasoning = reasoning;
             lastMessage.extra.reasoning_duration = null;
             lastMessage.extra.reasoning_signature = reasoningSignature;
+            if (coreGenerationJobId) {
+                lastMessage.extra.core_generation_job_id = coreGenerationJobId;
+            }
             await processImageAttachment(lastMessage, { imageUrls });
             if (power_user.message_token_count_enabled) {
                 const tokenCountText = (reasoning || '') + lastMessage.mes;
@@ -6707,6 +6730,9 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         lastMessage.extra.reasoning = reasoning;
         lastMessage.extra.reasoning_duration = null;
         lastMessage.extra.reasoning_signature = reasoningSignature;
+        if (coreGenerationJobId) {
+            lastMessage.extra.core_generation_job_id = coreGenerationJobId;
+        }
         await processImageAttachment(lastMessage, { imageUrls });
         if (power_user.message_token_count_enabled) {
             const tokenCountText = (reasoning || '') + lastMessage.mes;
@@ -6728,6 +6754,9 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         lastMessage.extra.model = getGeneratingModel();
         lastMessage.extra.reasoning += reasoning;
         lastMessage.extra.reasoning_signature = reasoningSignature;
+        if (coreGenerationJobId) {
+            lastMessage.extra.core_generation_job_id = coreGenerationJobId;
+        }
         await processImageAttachment(lastMessage, { imageUrls });
         // We don't know if the reasoning duration extended, so we don't update it here on purpose.
         if (power_user.message_token_count_enabled) {
@@ -6751,6 +6780,9 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         newMessage.extra.reasoning = reasoning;
         newMessage.extra.reasoning_duration = null;
         newMessage.extra.reasoning_signature = reasoningSignature;
+        if (coreGenerationJobId) {
+            newMessage.extra.core_generation_job_id = coreGenerationJobId;
+        }
         if (power_user.trim_spaces) {
             getMessage = getMessage.trim();
         }
