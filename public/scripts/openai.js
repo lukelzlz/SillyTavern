@@ -1677,8 +1677,7 @@ export function getCorePromptHandoffMode({ type = 'normal', dryRun = false, json
         && coreBridge?.isReady
         && coreBridge?.capabilities?.orchestrator === true
         && coreBridge?.capabilities?.browserPromptHandoff === true
-        && coreBridge?.capabilities?.serverPromptAssembly === true
-        && coreBridge?.capabilities?.promptInterception === true;
+        && coreBridge?.capabilities?.serverPromptAssembly === true;
 
     return constrainedNormalChat ? 'server_context' : 'client_final';
 }

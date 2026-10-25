@@ -520,6 +520,75 @@ describe('Generation Orchestrator & Server Job Manager Test Suite', () => {
             ]));
         });
 
+        test('PREPARING preserves canonical World Info slots through the gateway boundary', async () => {
+            const gatewayBodies = [];
+            const gateway = async (req, res) => {
+                gatewayBodies.push(req.body);
+                res.send({ choices: [{ message: { content: 'World Info response' } }] });
+            };
+
+            jobManager = new JobManager({
+                generateHandler: gateway,
+                sessionEngine: mockSessionEngine,
+                wsBridge: mockWsBridge,
+            });
+
+            const job = await jobManager.createJob({
+                userId: 'alice',
+                body: {
+                    model: 'test-model',
+                    core_prompt_mode: 'server_context',
+                    messages: [{ role: 'user', content: 'stale client prompt' }],
+                    core_prompt_context: {
+                        schemaVersion: 1,
+                        settings: {
+                            source: 'openai',
+                            model: 'test-model',
+                            maxContext: 1000,
+                            maxTokens: 100,
+                            newChatPrompt: '[Example Chat]',
+                        },
+                        generationControl: { type: 'normal', dryRun: false },
+                        characterContext: { name2: 'Seraphina' },
+                        worldInfo: {
+                            worldInfoBefore: 'stale browser world info',
+                            worldInfoAfter: '',
+                            entries: [
+                                { uid: 'before', key: ['signal'], position: 0, content: 'Canonical before.' },
+                                { uid: 'an-top', key: ['signal'], position: 2, content: 'Canonical AN top.' },
+                                { uid: 'em-top', key: ['signal'], position: 5, content: 'Canonical EM top.' },
+                                { uid: 'em-bottom', key: ['signal'], position: 6, content: 'Canonical EM bottom.' },
+                                { uid: 'an-bottom', key: ['signal'], position: 3, content: 'Canonical AN bottom.' },
+                                { uid: 'outlet', key: ['signal'], position: 7, outletName: 'lore', content: 'Canonical outlet.' },
+                            ],
+                            options: { budget: 0 },
+                        },
+                        promptOrder: ['worldInfoBefore', 'main', 'authorsNote', 'outletPrompt', 'dialogueExamples', 'chatHistory'],
+                        prompts: [
+                            { identifier: 'authorsNote', role: 'system', content: 'Base note.' },
+                            { identifier: 'outletPrompt', role: 'system', content: 'Lore: {{outlet::lore}}' },
+                        ],
+                        extensionPrompts: {},
+                        chatHistory: [{ role: 'user', content: 'The signal is active.' }],
+                        messageExamples: [[{ role: 'system', content: 'Example dialogue.' }]],
+                        toolsContext: { canPerformToolCalls: false },
+                        recordedTokenCounts: {},
+                    },
+                },
+            });
+
+            await new Promise((resolve) => job.on('completed', resolve));
+
+            expect(gatewayBodies).toHaveLength(1);
+            const contents = gatewayBodies[0].messages.map((message) => message.content);
+            expect(contents).not.toContain('stale browser world info');
+            expect(contents).toContain('Canonical before.');
+            expect(contents).toContain('Lore: Canonical outlet.');
+            expect(contents).toContain('Canonical EM top.');
+            expect(contents).toContain('Canonical EM bottom.');
+            expect(contents).toContain('Canonical AN top.\nBase note.\nCanonical AN bottom.');
+        });
+
         test('Request ids make duplicate generate:start delivery idempotent', async () => {
             const gateway = (_req, _res) => new Promise(() => { });
             jobManager = new JobManager({

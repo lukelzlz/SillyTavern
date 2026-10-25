@@ -673,7 +673,39 @@ export class PromptAssembler {
 
         const dialogueExamplesList = [];
         const populateExamples = () => {
-            if (!Array.isArray(messageExamples) || !messageExamples.length) return;
+            if (hasExplicitPromptOrder && !requestedPromptOrder.includes('dialogueExamples')) return;
+
+            const worldInfoExamples = Array.isArray(worldInfoScan?.EMEntries)
+                ? worldInfoScan.EMEntries
+                : [];
+            if ((!Array.isArray(messageExamples) || !messageExamples.length) && !worldInfoExamples.length) return;
+
+            const addWorldInfoExamples = (anchor) => {
+                for (let index = 0; index < worldInfoExamples.length; index++) {
+                    const example = worldInfoExamples[index];
+                    const isBefore = example?.position === 0 || example?.position === 'before';
+                    const isAfter = example?.position === 1 || example?.position === 'after';
+                    if ((anchor === 'before' && !isBefore) || (anchor === 'after' && !isAfter)) continue;
+
+                    const content = PromptAssembler.substituteMacros(example?.content || '', macroVars);
+                    if (!content) continue;
+
+                    const message = {
+                        role: 'system',
+                        content,
+                        identifier: `worldInfoExample-${anchor}-${index}`,
+                    };
+                    const tokens = tokenizer.countSync(message, message.identifier);
+                    message.tokens = tokens;
+                    if (tokenBudget - tokens < 0) continue;
+
+                    tokenBudget -= tokens;
+                    dialogueExamplesList.push(message);
+                }
+            };
+
+            addWorldInfoExamples('before');
+
             const newExampleChatContent = PromptAssembler.substituteMacros(settings.newChatPrompt || '---', macroVars);
             const newExampleChat = {
                 role: 'system',
@@ -710,6 +742,8 @@ export class PromptAssembler {
                     break;
                 }
             }
+
+            addWorldInfoExamples('after');
         };
 
         const acceptedHistoryMessages = [];

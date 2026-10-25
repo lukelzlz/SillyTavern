@@ -178,6 +178,8 @@ describe('Core P0 Security Bleeding Controls', () => {
         expect(content).toContain('worldInfoEntries');
         expect(content).toContain('serverOwnsPrompt');
         expect(content).toContain('core_request_id');
+        expect(content).toContain("coreBridge?.capabilities?.browserPromptHandoff === true");
+        expect(content).toContain("coreBridge?.capabilities?.serverPromptAssembly === true");
 
         const scriptPath = path.resolve(process.cwd(), '../public/script.js');
         const scriptContent = fs.readFileSync(scriptPath, 'utf8');

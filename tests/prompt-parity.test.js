@@ -376,6 +376,63 @@ describe('Prompt Parity Phase 1: 8 Golden Fixture Differential Tests', () => {
             },
         ]));
     });
+
+    test('Server-owned World Info preserves EMTop and EMBottom around dialogue examples', async () => {
+        const output = await PromptAssembler.assemble({
+            settings: {
+                source: 'openai',
+                maxContext: 1000,
+                maxTokens: 100,
+                newChatPrompt: '[Example Chat]',
+            },
+            generationControl: { type: 'normal', dryRun: false },
+            characterContext: { name2: 'Seraphina' },
+            worldInfo: {
+                entries: [
+                    {
+                        uid: 'em-top',
+                        key: ['clocktower'],
+                        position: 5,
+                        order: 20,
+                        content: 'World Info example before the dialogue.',
+                    },
+                    {
+                        uid: 'em-bottom',
+                        key: ['clocktower'],
+                        position: 6,
+                        order: 10,
+                        content: 'World Info example after the dialogue.',
+                    },
+                ],
+                options: { budget: 0 },
+            },
+            promptOrder: ['main', 'dialogueExamples', 'chatHistory'],
+            prompts: [],
+            extensionPrompts: {},
+            chatHistory: [{ role: 'user', content: 'The clocktower is humming.' }],
+            messageExamples: [[
+                { content: 'Example dialogue message.', name: 'Seraphina' },
+            ]],
+            toolsContext: { canPerformToolCalls: false },
+            recordedTokenCounts: {},
+        }, {
+            tokenizer: new DualTrackTokenizer({
+                tokenizer: createPromptTokenizer({ source: 'openai', model: 'gpt-4o' }),
+            }),
+        });
+
+        const contents = output.chat.map((message) => message.content);
+        const topIndex = contents.indexOf('World Info example before the dialogue.');
+        const separatorIndex = contents.indexOf('[Example Chat]');
+        const dialogueIndex = contents.indexOf('Example dialogue message.');
+        const bottomIndex = contents.indexOf('World Info example after the dialogue.');
+
+        expect(topIndex).toBeGreaterThanOrEqual(0);
+        expect(topIndex).toBeLessThan(separatorIndex);
+        expect(separatorIndex).toBeLessThan(dialogueIndex);
+        expect(dialogueIndex).toBeLessThan(bottomIndex);
+        expect(output.metadata.worldInfoScan.activatedEntryUids).toEqual(['em-top', 'em-bottom']);
+    });
 });
 
 describe('Prompt Parity: Dual-Track Tokenizer & Fail-Closed Guardrails', () => {
