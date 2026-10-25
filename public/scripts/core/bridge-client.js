@@ -119,12 +119,7 @@ export class BridgeClient {
                 this.reconnectAttempts = 0;
                 this.reconnectTimer = null;
                 if (this.stateBinding) {
-                    const syncPromise = this.stateBinding.dirty
-                        ? this.syncBoundState()
-                        : this.stateBinding.serverInitialized
-                            ? this.refreshBoundState()
-                            : this.bootstrapOrRefreshBoundState();
-                    syncPromise.catch((error) => {
+                    this.reconcileBoundStateAfterReconnect().catch((error) => {
                         console.warn('[Core Bridge] Failed to refresh bound state:', error);
                     });
                 }
@@ -574,6 +569,51 @@ export class BridgeClient {
         if (typeof binding.onSync === 'function') {
             binding.onSync({ type: 'sync', version: binding.version });
         }
+    }
+
+    /**
+     * Reconciles a locally dirty projection after a reconnect without allowing
+     * stale browser state to overwrite a server-side generation that completed
+     * while the browser was suspended or offline.
+     */
+    async reconcileBoundStateAfterReconnect() {
+        const binding = this.stateBinding;
+        if (!binding || !this.isConnected) {
+            return;
+        }
+
+        if (!binding.dirty) {
+            if (binding.serverInitialized) {
+                await this.refreshBoundState();
+            } else {
+                await this.bootstrapOrRefreshBoundState();
+            }
+            return;
+        }
+
+        const snapshot = await this.getStateSnapshot();
+        const sameIdentity = (left, right) => (left == null && right == null) || String(left) === String(right);
+        const sameChat = sameIdentity(snapshot?.chatId, binding.snapshotMeta.chatId);
+        const sameCharacter = sameIdentity(snapshot?.characterId, binding.snapshotMeta.characterId);
+        const serverVersion = Number(snapshot?.version) || 0;
+
+        if (sameChat && sameCharacter && serverVersion > binding.version) {
+            // The server may have completed a background job while the browser
+            // was asleep. Its newer snapshot is authoritative.
+            this.applyStateSnapshot(snapshot, snapshot.version);
+            return;
+        }
+
+        if (sameChat && sameCharacter) {
+            // No newer server patch exists for this identity. Preserve the
+            // intentional local mutation and sync it as the next snapshot.
+            await this.syncBoundState();
+            return;
+        }
+
+        // The browser is now looking at a different chat/character. Bootstrap
+        // that identity rather than overwriting it with the old server state.
+        await this.bootstrapBoundState();
     }
 
     send(data) {

@@ -213,4 +213,14 @@ describe('Core P0 Security Bleeding Controls', () => {
         expect(content).toContain('await this.waitUntilReady(timeoutMs);');
         expect(content).toContain("this.connectionState = 'READY'");
     });
+
+    test('bridge-client reconciles dirty state against a newer server snapshot after reconnect', () => {
+        const clientScriptPath = path.resolve(process.cwd(), '../public/scripts/core/bridge-client.js');
+        const content = fs.readFileSync(clientScriptPath, 'utf8');
+
+        expect(content).toContain('reconcileBoundStateAfterReconnect');
+        expect(content).toContain('serverVersion > binding.version');
+        expect(content).toContain('The server may have completed a background job while the browser');
+        expect(content).toContain('await this.bootstrapBoundState();');
+    });
 });
