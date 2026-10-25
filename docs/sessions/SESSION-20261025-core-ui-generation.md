@@ -1,6 +1,6 @@
 # Core 实际发送 UI、唯一落地与失败恢复
 
-工作区：`../SillyTavern-core-ui-generation`；分支：`feat/core-ui-generation`；基线：`9647b8924`。
+历史实现工作区：`../SillyTavern-core-ui-generation`；历史分支：`feat/core-ui-generation`；基线：`9647b8924`。该工作已通过合并提交 `e86caf2a0` 集成到 `release`。
 
 ## 范围与完成门禁
 
@@ -8,7 +8,7 @@
 - 随后验证 provider 首帧前和流中失败，两标签解除锁定、错误可见并可再次发送。
 - 不扩展供应商、工具调用或多 swipe；不包含生成中刷新后的完整文本接管、WS 断线追帧。
 - 独立 Chromium、临时 config/dataRoot、动态端口；禁用自动打开浏览器，不使用用户数据，不改变系统网络。
-- 主工作区保持原状；本阶段只做本地原子提交，不合入 release、不推送。
+- 当时主工作区保持原状；本阶段随后以原子提交合入 `release`，当前仍未推送。
 
 ## 第一单元：真实发送与持久化
 
@@ -38,4 +38,4 @@
 - 发送前同步当前浏览器 chat，保证观察标签页和失败后的再次发送保留最新用户消息。
 - 真实 handoff E2E：6 项通过；完整单测：29 suites / 632 tests 通过。
 - 根目录 Lint 通过。修改文件定向 ESLint 无 error；测试目录全量 `npm run lint -- --quiet` 仍受既有 `tests/core-bridge.test.js` 4 个双引号错误阻塞，未修改该无关文件。
-- 尚未生成用户验收手册；下一阶段再推进生成中刷新后的完整文本接管和定向 WS 追帧。
+- 刷新接管和定向 WS 追帧已在后续工作记录于 `docs/sessions/SESSION-20261025-refreshed-generation-catchup.md`；用户验收手册和用户验收仍未完成。

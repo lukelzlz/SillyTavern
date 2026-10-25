@@ -122,6 +122,75 @@ test('real send UI persists exactly one server-owned reply', async ({ page, requ
     await expect(page.locator('#chat .mes_text').filter({ hasText: reply })).toHaveCount(1);
 });
 
+test('a refreshed observer takes over the active stream without duplicating the reply', async ({ page, context, request, handoff }) => {
+    await request.post(`${handoff.providerUrl}/control/scenario`, { data: { mode: 'success', pauseAfterFirst: true } });
+    const identity = await openChat(page, handoff.providerUrl, `ui-refresh-${Date.now()}`);
+    const observer = await context.newPage();
+
+    try {
+        await openObserver(observer, handoff.providerUrl, identity);
+        await observer.evaluate(async () => {
+            const { getContext } = await import('/scripts/st-context.js');
+            await getContext().bindCoreState({ bootstrap: false });
+        });
+
+        await send(page, 'Refresh while the reply is streaming.');
+        await expect(page.locator('#chat .mes_text').last()).toHaveText('A controlled reply');
+        await expect(observer.locator('#mes_stop')).toBeVisible();
+
+        await observer.reload();
+        await observer.waitForFunction(() => !document.getElementById('preloader'));
+        await openObserver(observer, handoff.providerUrl, identity);
+        await observer.evaluate(async () => {
+            const { getContext } = await import('/scripts/st-context.js');
+            await getContext().bindCoreState({ bootstrap: false });
+        });
+
+        await expect(observer.locator('#mes_stop')).toBeVisible();
+        await expect(observer.locator('#chat .mes_text').filter({ hasText: 'A controlled reply' })).toHaveCount(1);
+        await request.post(`${handoff.providerUrl}/control/release`);
+
+        await expect(page.locator('#chat .mes_text').last()).toHaveText(reply);
+        await expect(observer.locator('#chat .mes_text').last()).toHaveText(reply);
+        await expect(observer.locator('#mes_stop')).toBeHidden();
+        await expect.poll(async () => (await readSavedChat(observer, identity)).filter(message => message.mes === reply).length).toBe(1);
+
+        for (const tab of [page, observer]) {
+            await expect.poll(() => tab.evaluate((expectedReply) => window.SillyTavern.getContext().chat.filter(message => message.mes === expectedReply).length, reply)).toBe(1);
+            await expect.poll(() => tab.evaluate(() => window.coreBridge.activeGenerationJob)).toBeNull();
+        }
+        expect((await (await request.get(`${handoff.providerUrl}/health`)).json()).requestCount).toBe(1);
+    } finally {
+        await observer.close().catch(() => {});
+    }
+});
+
+test('a targeted Core WebSocket disconnect catches up missing chunks once', async ({ page, request, handoff }) => {
+    const sentFrames = [];
+    page.on('websocket', socket => socket.on('framesent', frame => {
+        try {
+            sentFrames.push(JSON.parse(String(frame.payload)));
+        } catch {
+            // Ignore non-JSON WebSocket frames.
+        }
+    }));
+
+    await request.post(`${handoff.providerUrl}/control/scenario`, { data: { mode: 'success', pauseAfterFirst: true } });
+    const identity = await openChat(page, handoff.providerUrl, `ui-reconnect-${Date.now()}`);
+    await send(page, 'Reconnect the stream after a targeted socket loss.');
+    await expect(page.locator('#chat .mes_text').last()).toHaveText('A controlled reply');
+    await page.evaluate(() => window.coreBridge.ws?.close(1000, 'test reconnect'));
+    await request.post(`${handoff.providerUrl}/control/release`);
+
+    await expect(page.locator('#chat .mes_text').last()).toHaveText(reply);
+    await expect.poll(() => sentFrames
+        .filter(frame => frame.type === 'generate:reconnect')
+        .some(frame => Number(frame.payload?.lastSeq) >= 1)).toBe(true);
+    await expect.poll(async () => (await readSavedChat(page, identity)).filter(message => message.mes === reply).length).toBe(1);
+    await expect.poll(() => page.evaluate((expectedReply) => window.SillyTavern.getContext().chat.filter(message => message.mes === expectedReply).length, reply)).toBe(1);
+    expect((await (await request.get(`${handoff.providerUrl}/health`)).json()).requestCount).toBe(1);
+});
+
 async function openObserver(page, providerUrl, identity) {
     await testSetup.awaitST({ page });
     const welcome = page.locator('dialog[open]').filter({ hasText: 'Welcome to SillyTavern!' });

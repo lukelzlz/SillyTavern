@@ -94,3 +94,4 @@ node server.js
 | 2026-10-25 / SESSION-20261025 | Session | Core World Info 服务端交接递归、大小写与 chronological scan parity 阶段推进 | `docs/sessions/SESSION-20261025-world-info-server-handoff-recursion.md` | Tested |
 | 2026-10-25 / SESSION-refresh-stop | Session | Core 刷新标签页任务身份规范化、远端 Stop 与双页 idle 闭环 | `docs/sessions/SESSION-20261025-refreshed-tab-stop-blocker.md` | Deployed（隔离自动化联调；未用户验收） |
 | 2026-10-25 / SESSION-core-ui-generation | Session | Core 实际发送 UI、消息唯一落地、provider 失败跨标签恢复 | `docs/sessions/SESSION-20261025-core-ui-generation.md` | Tested（隔离自动化通过；测试目录存在既有 lint 阻塞；未用户验收） |
+| 2026-10-25 / SESSION-refresh-catchup | Session | Core 刷新页生成接管、native save 与定向 WS 追帧 | `docs/sessions/SESSION-20261025-refreshed-generation-catchup.md` | Tested（2 项真实 E2E、98 项定向单测通过；未用户验收） |

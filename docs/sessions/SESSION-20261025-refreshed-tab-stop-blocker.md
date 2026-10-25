@@ -1,8 +1,8 @@
 # 刷新标签页 Stop：失败复现、修复与交接
 
-状态：`[Deployed 本地服务联调完成]`。隔离环境自动化验证通过，尚未用户验收，未合入 `release`、未推送。
+状态：`[Deployed 本地服务联调完成]`。隔离环境自动化验证通过；修复已通过 `e86caf2a0` 合入 `release`，尚未用户验收，未推送。
 
-工作分支：`fix/core-refreshed-tab-stop`；工作区：`../SillyTavern-refreshed-tab-stop`。主工作区已有改动保留不变。
+历史工作分支：`fix/core-refreshed-tab-stop`；历史工作区：`../SillyTavern-refreshed-tab-stop`。该隔离工作已合入当前 `release`；后续按用户要求不再新建分支或 Worktree。
 
 ## 本轮目标与隔离边界
 
