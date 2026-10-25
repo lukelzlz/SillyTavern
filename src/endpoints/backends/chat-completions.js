@@ -2239,7 +2239,7 @@ router.post('/bias', async function (request, response) {
     }
 });
 
-router.post('/generate', async function (request, response) {
+export async function handleGenerate(request, response) {
     try {
         if (!request.body) return response.status(400).send({ error: true });
 
@@ -2726,7 +2726,9 @@ router.post('/generate', async function (request, response) {
             response.end();
         }
     }
-});
+}
+
+router.post('/generate', handleGenerate);
 
 const multimodalModels = express.Router();
 

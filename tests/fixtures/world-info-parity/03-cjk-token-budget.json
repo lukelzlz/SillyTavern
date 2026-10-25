@@ -1,0 +1,83 @@
+{
+  "name": "03-cjk-token-budget",
+  "description": "Verifies true token budget truncation on CJK characters and emojis, as well as ignoreBudget penetration behavior",
+  "input": {
+    "chatMessages": [
+      "他在修仙界探索，检测出自己拥有罕见的变异雷灵根，渴望寻找古老的法宝以应对未来的九九天劫。"
+    ],
+    "globalScanData": {
+      "trigger": "normal",
+      "personaDescription": "",
+      "characterDescription": "",
+      "characterPersonality": "",
+      "characterDepthPrompt": "",
+      "scenario": "",
+      "creatorNotes": ""
+    },
+    "entries": [
+      {
+        "uid": "cjk-1",
+        "comment": "Cultivation Sect Lore (15 tokens)",
+        "key": ["修仙"],
+        "position": 0,
+        "order": 10,
+        "content": "【修仙门派】天元宗是神州大陆最古老的修真门派，掌握太虚御剑术。"
+      },
+      {
+        "uid": "cjk-2",
+        "comment": "Spiritual Roots Lore (14 tokens)",
+        "key": ["灵根"],
+        "position": 0,
+        "order": 20,
+        "content": "【五行灵根】灵根分为金木水火土，天灵根修炼速度为常人十倍。"
+      },
+      {
+        "uid": "cjk-3",
+        "comment": "Treasure Lore (16 tokens - Should Overflow budget 35)",
+        "key": ["法宝"],
+        "position": 1,
+        "order": 30,
+        "content": "【绝世法宝】乾坤混元鼎能够炼制九转金丹，震慑诸天神魔！"
+      },
+      {
+        "uid": "cjk-4",
+        "comment": "Tribulation Lore (12 tokens - ignoreBudget: true penetrates)",
+        "key": ["天劫"],
+        "position": 0,
+        "order": 40,
+        "ignoreBudget": true,
+        "content": "【九九天劫】雷劫降临，万物寂灭 ⚡🔥💥。"
+      }
+    ],
+    "options": {
+      "budget": 35,
+      "matchWholeWords": false,
+      "trigger": "normal"
+    }
+  },
+  "recordedTokens": {
+    "【修仙门派】天元宗是神州大陆最古老的修真门派，掌握太虚御剑术。": 15,
+    "【五行灵根】灵根分为金木水火土，天灵根修炼速度为常人十倍。": 14,
+    "【绝世法宝】乾坤混元鼎能够炼制九转金丹，震慑诸天神魔！": 16,
+    "【九九天劫】雷劫降临，万物寂灭 ⚡🔥💥。": 12,
+    "【修仙门派】天元宗是神州大陆最古老的修真门派，掌握太虚御剑术。\n": 15,
+    "【修仙门派】天元宗是神州大陆最古老的修真门派，掌握太虚御剑术。\n【五行灵根】灵根分为金木水火土，天灵根修炼速度为常人十倍。\n": 29,
+    "【修仙门派】天元宗是神州大陆最古老的修真门派，掌握太虚御剑术。\n【五行灵根】灵根分为金木水火土，天灵根修炼速度为常人十倍。\n【绝世法宝】乾坤混元鼎能够炼制九转金丹，震慑诸天神魔！\n": 45,
+    "【修仙门派】天元宗是神州大陆最古老的修真门派，掌握太虚御剑术。\n【五行灵根】灵根分为金木水火土，天灵根修炼速度为常人十倍。\n【九九天劫】雷劫降临，万物寂灭 ⚡🔥💥。\n": 41,
+    "【修仙门派】天元宗是神州大陆最古老的修真门派，掌握太虚御剑术。\n【五行灵根】灵根分为金木水火土，天灵根修炼速度为常人十倍。\n【九九天劫】雷劫降临，万物寂灭 ⚡🔥💥。": 41
+  },
+  "expectedOutput": {
+    "worldInfoBefore": "【修仙门派】天元宗是神州大陆最古老的修真门派，掌握太虚御剑术。\n【五行灵根】灵根分为金木水火土，天灵根修炼速度为常人十倍。\n【九九天劫】雷劫降临，万物寂灭 ⚡🔥💥。",
+    "worldInfoAfter": "",
+    "EMEntries": [],
+    "WIDepthEntries": [],
+    "ANBeforeEntries": [],
+    "ANAfterEntries": [],
+    "outletEntries": {},
+    "activatedEntryUids": [
+      "cjk-1",
+      "cjk-2",
+      "cjk-4"
+    ]
+  }
+}

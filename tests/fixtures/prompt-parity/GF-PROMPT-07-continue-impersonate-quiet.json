@@ -1,0 +1,100 @@
+{
+  "fixtureId": "GF-PROMPT-07-continue-impersonate-quiet",
+  "description": "Validation of continue mode prefill displacement and quiet prompt reservation in control prompts",
+  "recordedAt": "2026-10-20T11:30:00Z",
+  "clientVersion": "1.19.0",
+  "input": {
+    "settings": {
+      "source": "claude",
+      "model": "claude-3-5-sonnet-20241022",
+      "maxContext": 4096,
+      "maxTokens": 500,
+      "squashSystemMessages": false,
+      "pinExamples": true,
+      "continuePrefill": true,
+      "assistantPrefill": "[Continue thought: {{char}}]",
+      "newChatPrompt": "--- Chat Begins ---"
+    },
+    "generationControl": {
+      "type": "continue",
+      "bias": "",
+      "quietPrompt": "[System Instruction: Generate silently.]",
+      "dryRun": false
+    },
+    "characterContext": {
+      "name1": "User",
+      "name2": "Seraphina"
+    },
+    "worldInfo": {
+      "worldInfoBefore": "",
+      "worldInfoAfter": ""
+    },
+    "prompts": [
+      {
+        "identifier": "main",
+        "role": "system",
+        "content": "You are Seraphina."
+      }
+    ],
+    "extensionPrompts": {},
+    "chatHistory": [
+      {
+        "role": "user",
+        "content": "Tell me more about the clockwork mechanism."
+      },
+      {
+        "role": "assistant",
+        "content": "The brass gear revolves around the mainspring axis..."
+      }
+    ],
+    "messageExamples": [],
+    "toolsContext": {
+      "canPerformToolCalls": false
+    },
+    "recordedTokenCounts": {
+      "main": 6,
+      "newMainChat": 5,
+      "quietPrompt": 8,
+      "continuePrefill": 16,
+      "Tell me more about the clockwork mechanism.": 9
+    }
+  },
+  "expectedOutput": {
+    "chat": [
+      {
+        "role": "system",
+        "content": "You are Seraphina."
+      },
+      {
+        "role": "system",
+        "content": "--- Chat Begins ---"
+      },
+      {
+        "role": "user",
+        "content": "Tell me more about the clockwork mechanism."
+      },
+      {
+        "role": "system",
+        "content": "[System Instruction: Generate silently.]"
+      },
+      {
+        "role": "assistant",
+        "content": "[Continue thought: Seraphina]\n\nThe brass gear revolves around the mainspring axis..."
+      }
+    ],
+    "metadata": {
+      "totalBudget": 3596,
+      "tokensUsed": 47,
+      "remainingTokens": 3549,
+      "reservedTokens": {
+        "replyPriming": 3,
+        "controlPrompts": 24,
+        "tools": 0,
+        "newChatMessage": 5
+      },
+      "droppedHistoryCount": 0,
+      "squashedCount": 0,
+      "injectedPromptsCount": 0
+    }
+  }
+}

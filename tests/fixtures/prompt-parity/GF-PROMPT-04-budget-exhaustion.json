@@ -1,0 +1,102 @@
+{
+  "fixtureId": "GF-PROMPT-04-budget-exhaustion",
+  "description": "Validation of reverse sliding window history truncation threshold under tight token budget",
+  "recordedAt": "2026-10-20T10:45:00Z",
+  "clientVersion": "1.19.0",
+  "input": {
+    "settings": {
+      "source": "openai",
+      "model": "gpt-4o",
+      "maxContext": 100,
+      "maxTokens": 40,
+      "squashSystemMessages": false,
+      "pinExamples": true,
+      "newChatPrompt": "--- Chat Begins ---"
+    },
+    "generationControl": {
+      "type": "normal",
+      "bias": "",
+      "dryRun": false
+    },
+    "characterContext": {
+      "name1": "User",
+      "name2": "Char"
+    },
+    "worldInfo": {
+      "worldInfoBefore": "",
+      "worldInfoAfter": ""
+    },
+    "prompts": [
+      {
+        "identifier": "main",
+        "role": "system",
+        "content": "Main system instructions."
+      }
+    ],
+    "extensionPrompts": {},
+    "chatHistory": [
+      {
+        "role": "user",
+        "content": "Old message 1"
+      },
+      {
+        "role": "assistant",
+        "content": "Old message 2"
+      },
+      {
+        "role": "user",
+        "content": "Recent message 3"
+      },
+      {
+        "role": "assistant",
+        "content": "Latest message 4"
+      }
+    ],
+    "messageExamples": [],
+    "toolsContext": {
+      "canPerformToolCalls": false
+    },
+    "recordedTokenCounts": {
+      "main": 15,
+      "newMainChat": 10,
+      "Old message 1": 15,
+      "Old message 2": 15,
+      "Recent message 3": 15,
+      "Latest message 4": 15
+    }
+  },
+  "expectedOutput": {
+    "chat": [
+      {
+        "role": "system",
+        "content": "Main system instructions."
+      },
+      {
+        "role": "system",
+        "content": "--- Chat Begins ---"
+      },
+      {
+        "role": "user",
+        "content": "Recent message 3"
+      },
+      {
+        "role": "assistant",
+        "content": "Latest message 4"
+      }
+    ],
+    "metadata": {
+      "totalBudget": 60,
+      "tokensUsed": 58,
+      "remainingTokens": 2,
+      "reservedTokens": {
+        "replyPriming": 3,
+        "controlPrompts": 0,
+        "tools": 0,
+        "newChatMessage": 10
+      },
+      "droppedHistoryCount": 2,
+      "squashedCount": 0,
+      "injectedPromptsCount": 0
+    }
+  }
+}

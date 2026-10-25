@@ -1,0 +1,192 @@
+{
+  "name": "02-all-positions-coverage",
+  "description": "Exhaustively validates structural output topology across all 8 standard positions including outlets, depth, and anchors",
+  "input": {
+    "chatMessages": [
+      "The system is initializing and preparing full context assembly."
+    ],
+    "globalScanData": {
+      "trigger": "normal",
+      "personaDescription": "",
+      "characterDescription": "",
+      "characterPersonality": "",
+      "characterDepthPrompt": "",
+      "scenario": "",
+      "creatorNotes": ""
+    },
+    "entries": [
+      {
+        "uid": "pos-0",
+        "comment": "worldInfoBefore",
+        "constant": true,
+        "position": 0,
+        "order": 10,
+        "content": "Slot 0: Before Character Content"
+      },
+      {
+        "uid": "pos-1",
+        "comment": "worldInfoAfter",
+        "constant": true,
+        "position": 1,
+        "order": 20,
+        "content": "Slot 1: After Character Content"
+      },
+      {
+        "uid": "pos-2",
+        "comment": "ANTop",
+        "constant": true,
+        "position": 2,
+        "order": 30,
+        "content": "Slot 2: Author Note Top"
+      },
+      {
+        "uid": "pos-3",
+        "comment": "ANBottom",
+        "constant": true,
+        "position": 3,
+        "order": 40,
+        "content": "Slot 3: Author Note Bottom"
+      },
+      {
+        "uid": "pos-4a",
+        "comment": "atDepth 2 role 0 A",
+        "constant": true,
+        "position": 4,
+        "depth": 2,
+        "role": 0,
+        "order": 50,
+        "content": "Slot 4: Depth 2 Role 0 Primary"
+      },
+      {
+        "uid": "pos-4b",
+        "comment": "atDepth 2 role 0 B",
+        "constant": true,
+        "position": 4,
+        "depth": 2,
+        "role": 0,
+        "order": 60,
+        "content": "Slot 4: Depth 2 Role 0 Secondary"
+      },
+      {
+        "uid": "pos-4c",
+        "comment": "atDepth 4 role 1",
+        "constant": true,
+        "position": 4,
+        "depth": 4,
+        "role": 1,
+        "order": 70,
+        "content": "Slot 4: Depth 4 Role 1 User Message"
+      },
+      {
+        "uid": "pos-5",
+        "comment": "EMTop",
+        "constant": true,
+        "position": 5,
+        "order": 80,
+        "content": "Slot 5: Extension Prompt Top"
+      },
+      {
+        "uid": "pos-6",
+        "comment": "EMBottom",
+        "constant": true,
+        "position": 6,
+        "order": 90,
+        "content": "Slot 6: Extension Prompt Bottom"
+      },
+      {
+        "uid": "pos-7a",
+        "comment": "outlet memory 1",
+        "constant": true,
+        "position": 7,
+        "outletName": "memory_injection",
+        "order": 100,
+        "content": "Slot 7: Memory Injection Alpha"
+      },
+      {
+        "uid": "pos-7b",
+        "comment": "outlet memory 2",
+        "constant": true,
+        "position": 7,
+        "outletName": "memory_injection",
+        "order": 110,
+        "content": "Slot 7: Memory Injection Beta"
+      },
+      {
+        "uid": "pos-7c",
+        "comment": "outlet summary",
+        "constant": true,
+        "position": 7,
+        "outletName": "lore_summary",
+        "order": 120,
+        "content": "Slot 7: Lore Summary Gamma"
+      }
+    ],
+    "options": {
+      "budget": 0,
+      "matchWholeWords": false,
+      "trigger": "normal"
+    }
+  },
+  "recordedTokens": {
+    "Slot 0: Before Character Content": 5,
+    "Slot 1: After Character Content": 5,
+    "Slot 2: Author Note Top": 5,
+    "Slot 3: Author Note Bottom": 5,
+    "Slot 4: Depth 2 Role 0 Primary": 8,
+    "Slot 4: Depth 2 Role 0 Secondary": 8,
+    "Slot 4: Depth 4 Role 1 User Message": 8,
+    "Slot 5: Extension Prompt Top": 5,
+    "Slot 6: Extension Prompt Bottom": 5,
+    "Slot 7: Memory Injection Alpha": 6,
+    "Slot 7: Memory Injection Beta": 6,
+    "Slot 7: Lore Summary Gamma": 6
+  },
+  "expectedOutput": {
+    "worldInfoBefore": "Slot 0: Before Character Content",
+    "worldInfoAfter": "Slot 1: After Character Content",
+    "EMEntries": [
+      { "position": 0, "content": "Slot 5: Extension Prompt Top" },
+      { "position": 1, "content": "Slot 6: Extension Prompt Bottom" }
+    ],
+    "WIDepthEntries": [
+      {
+        "depth": 4,
+        "role": 1,
+        "entries": ["Slot 4: Depth 4 Role 1 User Message"]
+      },
+      {
+        "depth": 2,
+        "role": 0,
+        "entries": [
+          "Slot 4: Depth 2 Role 0 Primary",
+          "Slot 4: Depth 2 Role 0 Secondary"
+        ]
+      }
+    ],
+    "ANBeforeEntries": ["Slot 2: Author Note Top"],
+    "ANAfterEntries": ["Slot 3: Author Note Bottom"],
+    "outletEntries": {
+      "memory_injection": [
+        "Slot 7: Memory Injection Beta",
+        "Slot 7: Memory Injection Alpha"
+      ],
+      "lore_summary": [
+        "Slot 7: Lore Summary Gamma"
+      ]
+    },
+    "activatedEntryUids": [
+      "pos-0",
+      "pos-1",
+      "pos-2",
+      "pos-3",
+      "pos-4a",
+      "pos-4b",
+      "pos-4c",
+      "pos-5",
+      "pos-6",
+      "pos-7a",
+      "pos-7b",
+      "pos-7c"
+    ]
+  }
+}

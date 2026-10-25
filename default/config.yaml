@@ -394,3 +394,33 @@ gemini:
 enableServerPlugins: false
 # Attempt to automatically update server plugins on startup
 enableServerPluginsAutoUpdate: true
+# -- CORE HEADLESS & TRANSPORT CONFIGURATION --
+core:
+  transport:
+    # Enable authenticated WebSocket transport for headless core (default: false)
+    enabled: false
+    # Ticket time-to-live in seconds
+    ticketTtlSeconds: 30
+    # Maximum concurrent WebSocket connections per user
+    maxConnectionsPerUser: 5
+    # Maximum total concurrent WebSocket connections
+    maxTotalConnections: 100
+    # Ticket rate limit per user/IP
+    rateLimitPoints: 10
+    # Ticket rate limit window duration in seconds (default: 60)
+    rateLimitDurationSeconds: 60
+    # Whitelisted trusted origins for WebSocket upgrade (empty requires matching configured host/port)
+    trustedOrigins: []
+    # Allow missing Origin header during upgrade (default: false, strict CSWSH fail-closed protection)
+    allowMissingOrigin: false
+  generation:
+    # Whether server-side generation orchestrator is enabled (default: true)
+    orchestratorEnabled: true
+    # Maximum wait timeout for plugin prompt interception (milliseconds, default: 3000)
+    pluginInterceptionTimeoutMs: 3000
+    # Maximum chunk capacity for the streaming ring buffer (default: 2048)
+    streamChunkRingBufferSize: 2048
+    # Finished job retention duration before memory cleanup (seconds, default: 300)
+    jobRetentionSeconds: 300
+    # Enable plugin prompt interception over WebSocket (default: false)
+    pluginInterceptionEnabled: false

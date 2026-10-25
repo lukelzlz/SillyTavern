@@ -23,6 +23,7 @@ import { renderTemplateAsync } from './templates.js';
 import { t } from './i18n.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { getOrCreatePersonaDescriptor, setPersonaDescription, user_avatar } from './personas.js';
+import { coreBridge } from './core/bridge-client.js';
 
 export const world_info_insertion_strategy = {
     evenly: 0,
@@ -4748,6 +4749,43 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
 
     if (sortedEntries.length === 0) {
         return { worldInfoBefore: '', worldInfoAfter: '', WIDepthEntries: [], EMEntries: [], ANBeforeEntries: [], ANAfterEntries: [], outletEntries: {}, allActivatedEntries: new Set() };
+    }
+
+    // [Server-side Headless Core Offloading]
+    // If core bridge is connected, delegate heavy regex scanning and recursion to Node.js server
+    if (coreBridge && coreBridge.isConnected) {
+        try {
+            const scanText = chat
+                .map(message => typeof message === 'string' ? message : (message?.mes || ''))
+                .filter(Boolean)
+                .join('\n');
+            const serverResult = await coreBridge.call('scanWorldInfo', {
+                entries: sortedEntries,
+                text: scanText,
+                options: {
+                    budget,
+                    maxRecursionSteps: world_info_max_recursion_steps,
+                    matchWholeWords: world_info_match_whole_words,
+                    trigger: globalScanData.trigger,
+                },
+            });
+            if (serverResult && serverResult.activatedCount !== undefined) {
+                console.debug(`[WI] Server-side WI scan finished in ${serverResult.stats?.durationMs}ms, activated: ${serverResult.activatedCount}`);
+                const allActivated = new Set(serverResult.activatedEntries.map(e => e.uid));
+                return {
+                    worldInfoBefore: serverResult.worldInfoBefore || '',
+                    worldInfoAfter: serverResult.worldInfoAfter || '',
+                    WIDepthEntries: serverResult.depthEntries || [],
+                    EMEntries: [],
+                    ANBeforeEntries: [],
+                    ANAfterEntries: [],
+                    outletEntries: {},
+                    allActivatedEntries: allActivated,
+                };
+            }
+        } catch (e) {
+            console.warn('[WI] Server-side WI scan failed, falling back to client scan:', e);
+        }
     }
 
     /** @type {number[]} Represents the delay levels for entries that are delayed until recursion */
