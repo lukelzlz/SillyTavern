@@ -127,6 +127,13 @@ async function bindCurrentCoreState(options = {}) {
         characterId: this_chid,
         characterName: characters[this_chid]?.name ?? null,
         chatId: getCurrentChatId(),
+        onGenerationState: (generationState) => {
+            if (generationState === 'idle') {
+                activateSendButtons();
+            } else {
+                deactivateSendButtons();
+            }
+        },
         ...options,
     });
 }

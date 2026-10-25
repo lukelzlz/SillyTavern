@@ -42,7 +42,7 @@ export class BridgeClient {
         /** @type {number} Number of server-originated events currently being projected. */
         this.remoteEventDepth = 0;
 
-        /** @type {{ chat: any[], chatMetadata: Record<string, unknown>, version: number, onSync?: Function, snapshotMeta: object, serverInitialized: boolean, dirty: boolean }|null} */
+        /** @type {{ chat: any[], chatMetadata: Record<string, unknown>, version: number, onSync?: Function, onGenerationState?: Function, generationState: string|null, snapshotMeta: object, serverInitialized: boolean, dirty: boolean }|null} */
         this.stateBinding = null;
 
         this.init();
@@ -297,10 +297,10 @@ export class BridgeClient {
     /**
      * Binds the current UI state containers as a server-authoritative projection.
      * The arrays/objects are mutated in place so existing DOM and plugin references remain valid.
-     * @param {{ chat: any[], chatMetadata?: Record<string, unknown>, characterId?: string|null, characterName?: string|null, chatId?: string|null, onSync?: Function, bootstrap?: boolean }} binding
+     * @param {{ chat: any[], chatMetadata?: Record<string, unknown>, characterId?: string|null, characterName?: string|null, chatId?: string|null, onSync?: Function, onGenerationState?: Function, bootstrap?: boolean }} binding
      * @returns {Promise<void>}
      */
-    async bindState({ chat, chatMetadata = {}, characterId = null, characterName = null, chatId = null, onSync, bootstrap = true } = {}) {
+    async bindState({ chat, chatMetadata = {}, characterId = null, characterName = null, chatId = null, onSync, onGenerationState, bootstrap = true } = {}) {
         if (!Array.isArray(chat)) {
             throw new TypeError('[Core Bridge] bindState requires a chat array');
         }
@@ -313,6 +313,8 @@ export class BridgeClient {
             chatMetadata,
             version: 0,
             onSync,
+            onGenerationState,
+            generationState: null,
             snapshotMeta: { characterId, characterName, chatId },
             serverInitialized: !bootstrap,
             dirty: false,
@@ -389,8 +391,32 @@ export class BridgeClient {
         binding.version = Number.isInteger(version) ? version : Number(snapshot.version) || binding.version;
         binding.serverInitialized = true;
         binding.dirty = false;
+        this.notifyGenerationState(snapshot.generationState);
         if (typeof binding.onSync === 'function') {
             binding.onSync({ type: 'snapshot', version: binding.version });
+        }
+    }
+
+    /**
+     * Projects the server-owned generation lifecycle into the local UI binding.
+     * The callback is deliberately isolated from state patch processing so a
+     * stale or malformed remote value cannot break the chat projection.
+     * @param {unknown} generationState
+     */
+    notifyGenerationState(generationState) {
+        const binding = this.stateBinding;
+        if (!binding || typeof generationState !== 'string' || !['idle', 'generating', 'intercepting'].includes(generationState)) {
+            return;
+        }
+
+        const changed = binding.generationState !== generationState;
+        binding.generationState = generationState;
+        if (changed && typeof binding.onGenerationState === 'function') {
+            try {
+                binding.onGenerationState(generationState);
+            } catch (error) {
+                console.warn('[Core Bridge] Failed to project generation state:', error);
+            }
         }
     }
 
@@ -459,9 +485,13 @@ export class BridgeClient {
                 break;
             }
             case 'generationState':
-                // The generation lifecycle is server-owned. Keep the local
-                // projection's metadata aligned without exposing the server's
-                // AbortController or requiring a full snapshot refresh.
+                // The generation lifecycle is server-owned. Project it through
+                // the optional UI callback without exposing the server's
+                // AbortController to the browser.
+                if (typeof patch.generationState !== 'string' || !['idle', 'generating', 'intercepting'].includes(patch.generationState)) {
+                    return false;
+                }
+                this.notifyGenerationState(patch.generationState);
                 break;
             default:
                 return false;

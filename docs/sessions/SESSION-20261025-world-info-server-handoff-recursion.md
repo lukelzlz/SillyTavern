@@ -32,6 +32,8 @@ status: tested
 16. 修复 `BridgeClient` 生成流的重连竞态：初始 `followGeneration()` 在 WS 尚未完成 authenticated handshake 时失败，不再因为 handshake 先完成而错过后续 catch-up；流初始化后会补发一次受共享 promise 去重保护的 `generate:reconnect`。
 17. WS 断开时主动以 `CORE_BRIDGE_UNAVAILABLE` 拒绝挂起的 generation/RPC 请求，确保 `openai.js` 能走既定 HTTP rollback，而不会把瞬时断线误报为不可降级的未知异常。
 18. 新增 authenticated WebSocket 断线追帧集成回归：生成首帧后关闭原连接，服务端继续生成并完成，新连接使用 `lastSeq` 追回缺失 chunk；新增浏览器 E2E 覆盖初始 reconnect race 的完整文本去重与终态收敛。
+19. `BridgeClient` 现在将服务端 `generationState` patch/snapshot 投影到绑定的浏览器状态，并通过可选回调驱动远端标签页的生成中/空闲 UI；`st-context` 已接入该回调，避免后台生成完成后其他标签页仍保持锁定状态。
+20. 新增浏览器 E2E 回归，验证 authenticated Core 状态投影从 `generating` 收敛到 `idle`，且不改变既有 prompt handoff 与 generation reconnect 路径。
 
 ## 验证记录
 
@@ -55,8 +57,10 @@ status: tested
 - 本轮完整回归：`cd tests && npm run test:unit` 通过，28 suites / 597 tests。
 - 本轮 generation reconnect/catch-up 增量：目标 ESLint 无 error；`cd tests && npm run test:unit -- generation-orchestrator.test.js --runInBand` 通过，54 tests；启动本地服务后 `npx playwright test frontend/CorePromptHandoff.e2e.js --config=playwright.config.js` 通过，2 tests。
 - 本轮完整检查：`npm run lint` 通过；`cd tests && npm run test:unit` 通过，28 suites / 598 tests。
+- 本轮 generation state projection 增量：`npm run lint` 通过；`cd tests && npm run test:unit -- core-bridge.test.js generation-orchestrator.test.js --runInBand` 通过，2 suites / 65 tests；启动本地服务后 `npm --prefix tests run test:e2e -- frontend/CorePromptHandoff.e2e.js --config=playwright.config.js --workers=1` 通过，3 tests；随后 `cd tests && npm run test:unit` 完整回归通过，28 suites / 598 tests。
 
 ## 未完成与下一阶段
 
 - 本阶段的 browser/server 完整 World Info slot differential fixture、真实 Core WS `server_context` interception 无重复注入验证，以及浏览器 `prepareOpenAIMessages()` ownership/fallback 路径均已完成。
-- 下一阶段继续沿 Core prompt handoff 主线补齐真实浏览器 authenticated Core WS 生成链路（当前已完成协议级 authenticated WS 与浏览器恢复竞态回归），重点推进 capability 开启时浏览器实际发起 `sendStreamingRequest()` 的端到端服务端生成/插件拦截；随后再处理生成中断后的 UI 状态恢复与多标签同步验收。
+- 本轮已补齐多标签生成状态投影的第一步：服务端 `generationState` 的状态 patch/snapshot 可驱动远端浏览器 UI 从生成中恢复为空闲；仍未完成远端标签页直接发起停止操作，以及 capability 开启时浏览器实际 `sendStreamingRequest()` 到服务端 gateway/plugin interception 的完整真实链路验收。
+- 下一阶段继续沿 Core prompt handoff 主线补齐真实浏览器 authenticated Core WS 生成链路，重点推进 capability 开启时浏览器实际发起 `sendStreamingRequest()` 的端到端服务端生成/插件拦截；随后再处理远端标签页停止操作与生成中断后的完整 UI 状态恢复验收。

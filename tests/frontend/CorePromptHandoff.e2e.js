@@ -233,4 +233,44 @@ test.describe('Core prompt handoff ownership', () => {
             { event: 'generation:token', fullText: 'AB' },
         ]);
     });
+
+    test('projects server generation lifecycle into a bound browser state', async ({ page }) => {
+        const result = await page.evaluate(async () => {
+            const { BridgeClient } = await import('/scripts/core/bridge-client.js');
+            const client = new BridgeClient();
+            client.connect = async () => { };
+
+            const chat = [];
+            const metadata = {};
+            const states = [];
+            await client.bindState({
+                chat,
+                chatMetadata: metadata,
+                onGenerationState: (state) => states.push(state),
+                bootstrap: false,
+            });
+
+            await client.handleMessage(JSON.stringify({
+                type: 'event',
+                event: 'state:patch',
+                data: {
+                    patch: { op: 'generationState', generationState: 'generating' },
+                    version: 1,
+                },
+            }));
+            await client.handleMessage(JSON.stringify({
+                type: 'event',
+                event: 'state:patch',
+                data: {
+                    patch: { op: 'generationState', generationState: 'idle' },
+                    version: 2,
+                },
+            }));
+
+            return { states, generationState: client.stateBinding?.generationState };
+        });
+
+        expect(result.states).toEqual(['generating', 'idle']);
+        expect(result.generationState).toBe('idle');
+    });
 });
