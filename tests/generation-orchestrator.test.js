@@ -4,7 +4,7 @@ import cookieSession from 'cookie-session';
 import { csrfSync } from 'csrf-sync';
 import WebSocket from 'ws';
 import storage from 'node-persist';
-import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from '@jest/globals';
+import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll, jest } from '@jest/globals';
 import { GenerationJob, JOB_STATUS } from '../src/core/generation/job.js';
 import {
     SyntheticResponse,
@@ -303,6 +303,35 @@ describe('Generation Orchestrator & Server Job Manager Test Suite', () => {
             expect(job.status).toBe(JOB_STATUS.FAILED);
             expect(job.error).toMatch(/Upstream rate limit exceeded/);
         });
+
+        for (const [name, payload] of [
+            ['object error', '{"error":{"message":"secret provider details"}}\n\n'],
+            ['string error', '{"error":"secret provider details"}\n\n'],
+            ['final line', '{"error":{"message":"secret provider details"}}'],
+            ['quota error', '{"quota_error":true}\n\n'],
+            ['trailing frames', '{"error":true}\n\ndata: {"choices":[{"delta":{"content":"must not appear"}}]}\n\ndata: [DONE]\n\n'],
+        ]) {
+            test(`HTTP 200 ${name} fails once and never settles partial output`, async () => {
+                const job = new GenerationJob({ userId: 'test-user' });
+                job.transition(JOB_STATUS.PREPARING);
+                job.transition(JOB_STATUS.STREAMING);
+                const failed = jest.fn();
+                const completed = jest.fn();
+                job.on('failed', failed);
+                job.on('completed', completed);
+                const res = new SyntheticResponse(job);
+                res.write('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n');
+                res.write(`data: ${payload.slice(0, 5)}`);
+                res.end(payload.slice(5));
+                await new Promise(resolve => res.on('finish', resolve));
+                expect(job.status).toBe(JOB_STATUS.FAILED);
+                expect(job.fullText).toBe('partial');
+                expect(job.abortController.signal.aborted).toBe(true);
+                expect(job.error).not.toContain('secret');
+                expect(failed).toHaveBeenCalledTimes(1);
+                expect(completed).not.toHaveBeenCalled();
+            });
+        }
 
         test('Disconnect resilience: synthetic socket stays open and does not abort upstream', async () => {
             const job = new GenerationJob({ userId: 'test-user' });

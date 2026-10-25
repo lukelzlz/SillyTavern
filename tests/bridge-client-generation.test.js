@@ -124,4 +124,48 @@ describe('BridgeClient active generation identity', () => {
         await event('generation:completed', { jobId: 'live-job' });
         expect(client.activeGenerationJob).toBeNull();
     });
+
+    test('reports a matching chat failure once and still delivers it to the stream', async () => {
+        const onGenerationError = jest.fn();
+        await client.bindState({ chat: [], chatId: 'chat-1', onGenerationError, bootstrap: false });
+        await event('generation:started', { jobId: 'job-1', chatId: 'chat-1', characterId: '0' });
+        const enqueue = jest.fn();
+        client.generationListeners.set('job-1', { enqueue });
+        await event('generation:failed', { jobId: 'job-1', error: 'failure' });
+        await event('generation:failed', { jobId: 'job-1', error: 'duplicate' });
+        expect(onGenerationError).toHaveBeenCalledTimes(1);
+        expect(onGenerationError).toHaveBeenCalledWith(expect.objectContaining({ jobId: 'job-1', chatId: 'chat-1', error: 'failure' }));
+        expect(enqueue).toHaveBeenCalledWith('generation:failed', { jobId: 'job-1', error: 'failure' });
+        expect(client.activeGenerationJob).toBeNull();
+    });
+
+    test('does not notify another chat or an unrelated job and isolates callback errors', async () => {
+        const onGenerationError = jest.fn(() => { throw new Error('UI callback'); });
+        jest.spyOn(console, 'warn').mockImplementation(() => {});
+        await client.bindState({ chat: [], chatId: 'chat-2', onGenerationError, bootstrap: false });
+        await handshake({ id: 'job-1', chatId: 'chat-1' });
+        await event('generation:failed', { jobId: 'unrelated' });
+        await event('generation:failed', { jobId: 'job-1' });
+        expect(onGenerationError).not.toHaveBeenCalled();
+        await handshake({ id: 'job-2', chatId: 'chat-2' });
+        const enqueue = jest.fn();
+        client.generationListeners.set('job-2', { enqueue });
+        await event('generation:failed', { jobId: 'job-2' });
+        expect(onGenerationError).toHaveBeenCalledTimes(1);
+        expect(enqueue).toHaveBeenCalled();
+        expect(client.activeGenerationJob).toBeNull();
+    });
+
+    test.each(['snapshot', 'catchup', 'live'])('tags %s failures for local placeholder rollback', async (source) => {
+        jest.spyOn(client, 'getGenerationJob').mockResolvedValue({
+            job: { status: source === 'snapshot' ? 'FAILED' : 'STREAMING', error: 'failed' },
+        });
+        jest.spyOn(client, 'reconnectGeneration').mockImplementation(async () => {
+            if (source === 'live') client.dispatchGenerationEvent('generation:failed', { jobId: 'job-1', error: 'failed' });
+            return source === 'catchup' ? { status: 'FAILED', error: 'failed' } : null;
+        });
+        const stream = client.followGeneration('job-1');
+        await expect(stream.next()).rejects.toMatchObject({ code: 'CORE_GENERATION_FAILED' });
+        expect(client.generationListeners.size).toBe(0);
+    });
 });

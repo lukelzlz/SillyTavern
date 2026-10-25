@@ -32,5 +32,10 @@
 
 ## 待完成
 
-- 双标签 provider failure 和再次发送回归。
-- 最终完整回归、用户验收说明与状态索引更新。
+- 已完成首 token 前 HTTP 失败、HTTP 200 流中错误和再次发送回归；两标签均解除锁定，失败占位清理，原用户消息保留。
+- `SyntheticResponse` 现在识别 JSON/SSE 中的 `error`、`quota_error`，失败只广播一次并拒绝将半截文本结算为成功；错误内容不把上游敏感细节暴露给浏览器。
+- `BridgeClient` 增加匹配聊天的失败通知；`StreamingProcessor` 仅回滚本 Core 任务的本地占位，避免重复 MESSAGE_RECEIVED。
+- 发送前同步当前浏览器 chat，保证观察标签页和失败后的再次发送保留最新用户消息。
+- 真实 handoff E2E：6 项通过；完整单测：29 suites / 632 tests 通过。
+- 根目录 Lint 通过。修改文件定向 ESLint 无 error；测试目录全量 `npm run lint -- --quiet` 仍受既有 `tests/core-bridge.test.js` 4 个双引号错误阻塞，未修改该无关文件。
+- 尚未生成用户验收手册；下一阶段再推进生成中刷新后的完整文本接管和定向 WS 追帧。

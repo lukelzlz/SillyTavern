@@ -127,12 +127,27 @@ async function bindCurrentCoreState(options = {}) {
         characterId: this_chid,
         characterName: characters[this_chid]?.name ?? null,
         chatId: getCurrentChatId(),
+        onSync: (change) => {
+            // The local StreamingProcessor owns its DOM until finalization.
+            // Observer tabs have no processor and need to render remote data,
+            // not merely mutate their chat array in the background.
+            if (!streamingProcessor && (change.type === 'snapshot'
+                || (change.type === 'patch' && change.operation !== 'generationState'))) {
+                printMessages().catch(error => console.warn('[Core Bridge] Failed to render chat projection:', error));
+            }
+        },
         onGenerationState: (generationState) => {
             if (generationState === 'idle') {
-                activateSendButtons();
+                // Local finalization/rollback still owns its save and UI lock.
+                if (!streamingProcessor) activateSendButtons();
             } else {
                 deactivateSendButtons();
             }
+        },
+        onGenerationError: () => {
+            // Do not render arbitrary provider payloads as HTML or expose details
+            // from upstream credentials/URLs in a cross-tab notification.
+            toastr.error(t`Generation failed. Please try again.`, t`Text generation error`, { timeOut: 10000 });
         },
         ...options,
     });

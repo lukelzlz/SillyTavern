@@ -3445,6 +3445,9 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null, co
 
         let coreStream;
         try {
+            // Include the just-sent user message before the job can settle or
+            // fail. A second tab must not retry from a pre-send snapshot.
+            await coreBridge.syncBoundState();
             ({ stream: coreStream } = await coreBridge.startGenerationStream(
                 generate_data,
                 5000,
