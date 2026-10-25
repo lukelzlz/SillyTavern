@@ -66,6 +66,16 @@ status: tested
 
 ## 未完成与下一阶段
 
+### 2026-10-25 隔离浏览器夹具增量
+
+- 在 `fix/core-refreshed-tab-stop` 隔离工作区承接已有未提交测试改动，主工作区不变。
+- `core-handoff-fixture.js` 复用真实认证服务夹具，使用临时 config/dataRoot、动态端口、独立 headless Chromium；服务端显式禁止自动打开浏览器。
+- mock provider 的响应等待随连接关闭释放，夹具退出时清理服务端及 provider 子进程，并为 provider 退出增加强制终止兜底。
+- 原有真实 handoff 两项 E2E 通过；根目录 Lint 通过，测试文件 ESLint 无 error。
+- 认证回归首次出现首帧握手超时：原测试在 `connectWs()` 返回后才监听消息，可能漏过同一事件循环的握手。夹具改为在 `open` 回调内先注册握手 promise，调用方等待该 promise，保持原握手检查的 2000ms 超时而非加长等待。
+- 夹具最终复测：`npm --prefix tests run test:unit -- core-auth-regression.test.js --runInBand`，37 tests 通过；`npm --prefix tests run test:e2e -- --config=playwright.core-handoff.config.js --grep "sends browser context|stops a response-gated" --workers=1`，2 tests 通过。
+- 刷新标签页 Stop 的失败复现保留在工作区，将与生产修复同一提交交付；本夹具增量不宣称该问题已解决。
+
 - 本阶段的 browser/server 完整 World Info slot differential fixture、真实 Core WS `server_context` interception 无重复注入验证，以及浏览器 `prepareOpenAIMessages()` ownership/fallback 路径均已完成。
 - 上一轮已补齐多标签生成状态投影的第一步；本轮在此基础上完成了远端标签页 Stop 与 capability 开启时的真实 Core WS server-context streaming 验收。
 - 本轮已完成 capability 开启时浏览器真实 Core WS server-context streaming、服务端 World Info/插件 interception、response-gated 远端停止与 UI stream 收敛；仍未完成完整的双浏览器页面共享 active job 刷新接管，以及 provider 失败后的真实浏览器跨标签页错误 UI 验收。

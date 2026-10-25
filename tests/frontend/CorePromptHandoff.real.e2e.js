@@ -1,16 +1,25 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../util/core-handoff-fixture.js';
 import { testSetup } from './frontent-test-utils.js';
 
 test.use({ channel: 'chromium' });
 
+async function finishOnboarding(page) {
+    const welcome = page.locator('dialog[open]').filter({ hasText: 'Welcome to SillyTavern!' });
+    if (await welcome.count()) {
+        await welcome.locator('.popup-button-ok').click();
+        await expect(welcome).toHaveCount(0);
+    }
+}
+
 test.describe('Real Core prompt handoff transport', () => {
     test.beforeEach(async ({ page }) => {
         await testSetup.awaitST({ page });
+        await finishOnboarding(page);
         await page.waitForFunction(() => window.coreBridge?.isReady === true);
     });
 
-    test('sends browser context through authenticated Core WS and server prompt assembly', async ({ page }) => {
-        const result = await page.evaluate(async () => {
+    test('sends browser context through authenticated Core WS and server prompt assembly', async ({ page, handoff }) => {
+        const result = await page.evaluate(async (providerUrl) => {
             const script = await import('/script.js');
             const openai = await import('/scripts/openai.js');
             const { getStringHash } = await import('/scripts/utils.js');
@@ -22,7 +31,7 @@ test.describe('Real Core prompt handoff transport', () => {
             openai.oai_settings.n = 1;
             openai.oai_settings.show_thoughts = false;
             openai.oai_settings.openai_model = 'core-handoff-e2e';
-            openai.oai_settings.reverse_proxy = 'http://127.0.0.1:8124/v1';
+            openai.oai_settings.reverse_proxy = `${providerUrl}/v1`;
             openai.oai_settings.proxy_password = 'test-provider-key';
             openai.oai_settings.chat_completion_source = openai.chat_completion_sources.OPENAI;
             getContext().accountStorage.setItem(
@@ -75,7 +84,7 @@ test.describe('Real Core prompt handoff transport', () => {
                     chunks.push(chunk.text);
                 }
 
-                const providerRequest = await fetch('http://127.0.0.1:8124/control/last-request').then(response => response.json());
+                const providerRequest = await fetch(`${providerUrl}/control/last-request`).then(response => response.json());
 
                 return {
                     mode,
@@ -86,7 +95,7 @@ test.describe('Real Core prompt handoff transport', () => {
             } finally {
                 eventSource.removeListener(event_types.CHAT_COMPLETION_PROMPT_READY, interceptionListener);
             }
-        });
+        }, handoff.providerUrl);
 
         expect(result.capabilities).toMatchObject({
             orchestrator: true,
@@ -105,8 +114,8 @@ test.describe('Real Core prompt handoff transport', () => {
         ]));
     });
 
-    test('stops a response-gated Core job without disabling the network', async ({ page }) => {
-        const result = await page.evaluate(async () => {
+    test('stops a response-gated Core job without disabling the network', async ({ page, handoff }) => {
+        const result = await page.evaluate(async (providerUrl) => {
             const script = await import('/script.js');
             const openai = await import('/scripts/openai.js');
             const { getStringHash } = await import('/scripts/utils.js');
@@ -117,7 +126,7 @@ test.describe('Real Core prompt handoff transport', () => {
             openai.oai_settings.n = 1;
             openai.oai_settings.show_thoughts = false;
             openai.oai_settings.openai_model = 'core-handoff-stop-e2e';
-            openai.oai_settings.reverse_proxy = 'http://127.0.0.1:8124/v1';
+            openai.oai_settings.reverse_proxy = `${providerUrl}/v1`;
             openai.oai_settings.proxy_password = 'test-provider-key';
             openai.oai_settings.chat_completion_source = openai.chat_completion_sources.OPENAI;
             getContext().accountStorage.setItem(
@@ -125,7 +134,7 @@ test.describe('Real Core prompt handoff transport', () => {
                 'true',
             );
 
-            await fetch('http://127.0.0.1:8124/control/block', { method: 'POST' });
+            await fetch(`${providerUrl}/control/block`, { method: 'POST' });
 
             const [, , context, mode] = await openai.prepareOpenAIMessages({
                 name1: 'Alice',
@@ -167,7 +176,7 @@ test.describe('Real Core prompt handoff transport', () => {
 
             const jobId = window.coreBridge.activeGenerationJob?.jobId || null;
             const stopped = script.stopGeneration();
-            await fetch('http://127.0.0.1:8124/control/release', { method: 'POST' });
+            await fetch(`${providerUrl}/control/release`, { method: 'POST' });
             await streamPromise;
 
             return {
@@ -177,7 +186,7 @@ test.describe('Real Core prompt handoff transport', () => {
                 streamError,
                 activeGenerationJob: window.coreBridge.activeGenerationJob,
             };
-        });
+        }, handoff.providerUrl);
 
         expect(result.mode).toBe('server_context');
         expect(result.jobId).toEqual(expect.any(String));

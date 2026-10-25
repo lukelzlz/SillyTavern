@@ -2,8 +2,9 @@ import http from 'node:http';
 
 const port = Number(process.env.ST_CORE_PROVIDER_PORT || 8124);
 let blocked = false;
-let releaseBlockedRequest = null;
+const pendingResponses = new Set();
 let lastRequest = null;
+let closedResponses = 0;
 
 function readBody(req) {
     return new Promise((resolve, reject) => {
@@ -22,12 +23,17 @@ function sendJson(res, value) {
     res.end(JSON.stringify(value));
 }
 
-async function waitUntilReleased() {
+async function waitUntilReleased(res) {
     if (!blocked) return;
     await new Promise((resolve) => {
-        releaseBlockedRequest = resolve;
+        const release = () => {
+            pendingResponses.delete(release);
+            res.off('close', release);
+            resolve();
+        };
+        pendingResponses.add(release);
+        res.once('close', release);
     });
-    releaseBlockedRequest = null;
 }
 
 const server = http.createServer(async (req, res) => {
@@ -41,7 +47,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'GET' && req.url === '/health') {
-        sendJson(res, { ok: true, blocked });
+        sendJson(res, { ok: true, blocked, pending: pendingResponses.size, closedResponses });
         return;
     }
 
@@ -53,7 +59,7 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && req.url === '/control/release') {
         blocked = false;
-        releaseBlockedRequest?.();
+        for (const release of pendingResponses) release();
         sendJson(res, { ok: true, blocked });
         return;
     }
@@ -70,10 +76,13 @@ const server = http.createServer(async (req, res) => {
     }
 
     try {
-        lastRequest = JSON.parse(await readBody(req));
-        await waitUntilReleased();
+        const request = JSON.parse(await readBody(req));
+        lastRequest = request;
+        res.once('close', () => { closedResponses++; });
+        await waitUntilReleased(res);
+        if (res.destroyed) return;
 
-        const messages = Array.isArray(lastRequest?.messages) ? lastRequest.messages : [];
+        const messages = Array.isArray(request?.messages) ? request.messages : [];
         const content = messages.map(message => String(message?.content || '')).join('\n');
         const markerCount = (content.match(/CORE_PROVIDER_MARKER/g) || []).length;
         const worldInfoCount = (content.match(/CORE_PROVIDER_WORLD_INFO/g) || []).length;
@@ -94,11 +103,14 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(port, '127.0.0.1', () => {
-    process.stdout.write(`Core handoff provider listening on ${port}\n`);
+    const actualPort = server.address().port;
+    process.send?.({ port: actualPort });
+    process.stdout.write(`Core handoff provider listening on ${actualPort}\n`);
 });
 
 function shutdown() {
-    releaseBlockedRequest?.();
+    for (const release of pendingResponses) release();
+    server.closeAllConnections();
     server.close(() => process.exit(0));
 }
 
