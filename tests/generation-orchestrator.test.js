@@ -1528,6 +1528,155 @@ describe('Generation Orchestrator & Server Job Manager Test Suite', () => {
             }
         });
 
+        test('runs authenticated server_context interception without duplicating World Info slots', async () => {
+            const { jobManager } = await import('../src/core/generation/job-manager.js');
+            const previousHandler = jobManager.generateHandler;
+            const previousPluginFlag = process.env.SILLYTAVERN_CORE_GENERATION_PLUGININTERCEPTIONENABLED;
+            const gatewayBodies = [];
+            process.env.SILLYTAVERN_CORE_GENERATION_PLUGININTERCEPTIONENABLED = 'true';
+            jobManager.generateHandler = async (req, res) => {
+                gatewayBodies.push(req.body);
+                res.write('data: {"choices":[{"delta":{"content":"intercepted"}}]}\n\n');
+                res.write('data: [DONE]\n\n');
+                res.end();
+            };
+
+            try {
+                const requestId = 'server-context-ws-interception-request';
+                const createdPromise = waitForMessage(
+                    aliceWs,
+                    (message) => message.type === 'job:created' && message.requestId === requestId,
+                );
+                const interceptionPromise = waitForMessage(
+                    aliceWs,
+                    (message) => message.type === 'intercept_req'
+                        && message.event === 'chat_completion_prompt_ready',
+                );
+                const completedPromise = waitForMessage(
+                    aliceWs,
+                    (message) => message.type === 'event'
+                        && message.event === 'generation:completed'
+                        && message.data?.fullText === 'intercepted',
+                );
+
+                aliceWs.send(JSON.stringify({
+                    type: 'generate:start',
+                    id: requestId,
+                    payload: {
+                        core_prompt_mode: 'server_context',
+                        core_prompt_interception: true,
+                        core_request_id: 'server-context-ws-interception-core-request',
+                        stream: true,
+                        chat_completion_source: 'openai',
+                        model: 'test-model',
+                        core_prompt_context: {
+                            schemaVersion: 1,
+                            settings: {
+                                source: 'openai',
+                                model: 'test-model',
+                                maxContext: 1000,
+                                maxTokens: 100,
+                                newChatPrompt: '[Chat begins]',
+                            },
+                            generationControl: { type: 'normal', dryRun: false },
+                            characterContext: { name1: 'Alice', name2: 'Seraphina' },
+                            worldInfo: {
+                                worldInfoBefore: 'stale browser before',
+                                worldInfoAfter: 'stale browser after',
+                                entries: [
+                                    {
+                                        uid: 'ws-intercept-before',
+                                        constant: true,
+                                        position: 0,
+                                        content: 'Intercept canonical before.',
+                                    },
+                                    {
+                                        uid: 'ws-intercept-an-top',
+                                        constant: true,
+                                        position: 2,
+                                        content: 'Intercept canonical AN top.',
+                                    },
+                                    {
+                                        uid: 'ws-intercept-an-bottom',
+                                        constant: true,
+                                        position: 3,
+                                        content: 'Intercept canonical AN bottom.',
+                                    },
+                                    {
+                                        uid: 'ws-intercept-outlet',
+                                        constant: true,
+                                        position: 7,
+                                        outletName: 'lore',
+                                        content: 'Intercept canonical outlet.',
+                                    },
+                                ],
+                                options: { budget: 0 },
+                            },
+                            promptOrder: ['worldInfoBefore', 'main', 'authorsNote', 'outletPrompt', 'chatHistory'],
+                            prompts: [
+                                { identifier: 'authorsNote', role: 'system', content: 'Intercept base note.' },
+                                { identifier: 'outletPrompt', role: 'system', content: 'Intercept lore: {{outlet::lore}}' },
+                            ],
+                            extensionPrompts: {},
+                            chatHistory: [{ role: 'user', content: 'The signal is active.' }],
+                            messageExamples: [],
+                            toolsContext: { canPerformToolCalls: false },
+                            recordedTokenCounts: {},
+                        },
+                    },
+                }));
+
+                const created = await createdPromise;
+                const interception = await interceptionPromise;
+                expect(interception.jobId).toBe(created.jobId);
+                expect(interception.payload.chat).toEqual(expect.arrayContaining([
+                    { role: 'system', content: 'Intercept canonical before.' },
+                    { role: 'system', content: 'Intercept canonical AN top.\nIntercept base note.\nIntercept canonical AN bottom.' },
+                    { role: 'system', content: 'Intercept lore: Intercept canonical outlet.' },
+                ]));
+                expect(interception.payload.chat).not.toEqual(expect.arrayContaining([
+                    { role: 'system', content: 'stale browser before' },
+                    { role: 'system', content: 'stale browser after' },
+                ]));
+
+                const interceptedChat = [
+                    ...interception.payload.chat,
+                    { role: 'system', content: 'PLUGIN_MARKER' },
+                ];
+                aliceWs.send(JSON.stringify({
+                    type: 'intercept_ack',
+                    interceptId: interception.interceptId,
+                    jobId: interception.jobId,
+                    coreRequestId: interception.coreRequestId,
+                    payload: {
+                        ...interception.payload,
+                        chat: interceptedChat,
+                    },
+                }));
+
+                const completed = await completedPromise;
+                expect(completed.data.jobId).toBe(created.jobId);
+                expect(gatewayBodies).toHaveLength(1);
+                const messages = gatewayBodies[0].messages;
+                const countContent = (content) => messages.filter((message) => message.content === content).length;
+                expect(countContent('Intercept canonical before.')).toBe(1);
+                expect(countContent('Intercept canonical AN top.\nIntercept base note.\nIntercept canonical AN bottom.')).toBe(1);
+                expect(countContent('Intercept lore: Intercept canonical outlet.')).toBe(1);
+                expect(countContent('PLUGIN_MARKER')).toBe(1);
+                expect(messages).not.toEqual(expect.arrayContaining([
+                    { role: 'system', content: 'stale browser before' },
+                    { role: 'system', content: 'stale browser after' },
+                ]));
+            } finally {
+                jobManager.generateHandler = previousHandler;
+                if (previousPluginFlag === undefined) {
+                    delete process.env.SILLYTAVERN_CORE_GENERATION_PLUGININTERCEPTIONENABLED;
+                } else {
+                    process.env.SILLYTAVERN_CORE_GENERATION_PLUGININTERCEPTIONENABLED = previousPluginFlag;
+                }
+            }
+        });
+
         test('broadcasts reasoning, tool-call, and usage metadata from the provider stream', async () => {
             const { jobManager } = await import('../src/core/generation/job-manager.js');
             const previousHandler = jobManager.generateHandler;
