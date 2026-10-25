@@ -109,6 +109,7 @@ export class PromptAssembler {
                 .filter((identifier) => typeof identifier === 'string' && identifier.length > 0)
             : [];
         const hasExplicitPromptOrder = requestedPromptOrder.length > 0;
+        const promptOrderIndex = new Map(requestedPromptOrder.map((identifier, index) => [identifier, index]));
         const isExplicitPromptEnabled = (identifier) => !hasExplicitPromptOrder || requestedPromptOrder.includes(identifier);
 
         const tokenizer = options.tokenizer || new DualTrackTokenizer({
@@ -328,6 +329,7 @@ export class PromptAssembler {
         recordTiming(PIPELINE_STAGES.RELATIVE_SYSTEM_TOPOLOGY_PLACEMENT);
 
         const absolutePrompts = [];
+        const postHistorySlots = new Map();
         const defaultBaseOrderedSequence = [
             'worldInfoBefore',
             'main',
@@ -414,6 +416,22 @@ export class PromptAssembler {
             }
         }
 
+        // PromptManager's canonical default order places post-history prompts
+        // (notably jailbreak) after the chatHistory marker. The browser sends
+        // the active collection order in server_context, so move any relative
+        // slot declared after chatHistory out of the root topology while
+        // preserving the legacy layout when no explicit order is supplied.
+        if (hasExplicitPromptOrder && promptOrderIndex.has('chatHistory')) {
+            const chatHistoryIndex = promptOrderIndex.get('chatHistory');
+            for (const [identifier, slotMessages] of [...rootSlots.entries()]) {
+                const promptIndex = promptOrderIndex.get(identifier);
+                if (promptIndex !== undefined && promptIndex > chatHistoryIndex) {
+                    rootSlots.delete(identifier);
+                    postHistorySlots.set(identifier, slotMessages);
+                }
+            }
+        }
+
         // Relative injection into main (injectToMain)
         const relativeInjections = otherRelativePrompts.filter(p => p.position === 'start' || p.position === 'end');
         for (const relPrompt of relativeInjections) {
@@ -452,6 +470,11 @@ export class PromptAssembler {
 
         // Deduct budget for all root slot messages
         for (const [, msgs] of rootSlots.entries()) {
+            for (const msg of msgs) {
+                tokenBudget -= msg.tokens;
+            }
+        }
+        for (const [, msgs] of postHistorySlots.entries()) {
             for (const msg of msgs) {
                 tokenBudget -= msg.tokens;
             }
@@ -786,6 +809,11 @@ export class PromptAssembler {
         }
         allMessages.push(...dialogueExamplesList);
         allMessages.push(...acceptedHistoryMessages);
+        const orderedPostHistorySlots = [...postHistorySlots.entries()]
+            .sort(([left], [right]) => (promptOrderIndex.get(left) ?? 0) - (promptOrderIndex.get(right) ?? 0));
+        for (const [, msgs] of orderedPostHistorySlots) {
+            allMessages.push(...msgs);
+        }
         allMessages.push(...finalizedControlPrompts);
 
         // =====================================================================

@@ -152,6 +152,34 @@ describe('Prompt Parity Phase 1: 8 Golden Fixture Differential Tests', () => {
         expect(output.chat.map((message) => message.content)).not.toContain('Seraphina is a master artificer of clockwork machines.');
         expect(output.chat.map((message) => message.content)).toContain('You are Seraphina.');
     });
+
+    test('Browser prompt order keeps post-history prompts after chat history', async () => {
+        const fixture = loadFixture('GF-PROMPT-01-standard-chat.json');
+        const input = structuredClone(fixture.input);
+        input.promptOrder = ['main', 'chatHistory', 'jailbreak'];
+        input.prompts = [
+            { identifier: 'chatHistory', role: 'system', content: '' },
+            { identifier: 'jailbreak', role: 'system', content: 'Post-history safety instruction.' },
+        ];
+        input.recordedTokenCounts = {
+            main: 6,
+            newMainChat: 5,
+            'chatHistory-1': 14,
+            'chatHistory-2': 16,
+            'chatHistory-3': 11,
+            jailbreak: 5,
+        };
+
+        const output = await PromptAssembler.assemble(input);
+        const jailbreakIndex = output.chat.findIndex((message) => message.content === 'Post-history safety instruction.');
+        const lastHistoryIndex = output.chat.findLastIndex((message) => message.content === 'What seems to be causing the temporal slip?');
+
+        expect(jailbreakIndex).toBeGreaterThan(lastHistoryIndex);
+        expect(output.chat[jailbreakIndex]).toEqual({
+            role: 'system',
+            content: 'Post-history safety instruction.',
+        });
+    });
 });
 
 describe('Prompt Parity: Dual-Track Tokenizer & Fail-Closed Guardrails', () => {
