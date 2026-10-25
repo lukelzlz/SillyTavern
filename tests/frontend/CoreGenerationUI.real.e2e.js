@@ -191,6 +191,45 @@ test('a targeted Core WebSocket disconnect catches up missing chunks once', asyn
     expect((await (await request.get(`${handoff.providerUrl}/health`)).json()).requestCount).toBe(1);
 });
 
+test('closing the sending page leaves the server job running and restores the reply when reopened', async ({ page, context, request, handoff }) => {
+    await request.post(`${handoff.providerUrl}/control/scenario`, { data: { mode: 'success', pauseAfterFirst: true } });
+    const identity = await openChat(page, handoff.providerUrl, `ui-close-${Date.now()}`);
+    await send(page, 'Keep generating after this page closes.');
+    await expect.poll(async () => page.evaluate(() => window.coreBridge.activeGenerationJob?.jobId)).toEqual(expect.any(String));
+    await page.close();
+
+    // The browser connection is gone; only the provider gate controls when
+    // the server-owned job can finish. No browser-side abort is requested.
+    await request.post(`${handoff.providerUrl}/control/release`);
+    await expect.poll(async () => (await (await request.get(`${handoff.providerUrl}/health`)).json()).pending).toBe(0);
+    await expect.poll(async () => {
+        const saved = JSON.parse(await fs.readFile(path.join(handoff.dataRoot, 'default-user/core-sessions/state.json'), 'utf8'));
+        return saved.snapshot.chat.filter(message => message.mes === reply).length;
+    }).toBe(1);
+
+    const reopened = await context.newPage();
+    try {
+        await testSetup.awaitST({ page: reopened });
+        const welcome = reopened.locator('dialog[open]').filter({ hasText: 'Welcome to SillyTavern!' });
+        if (await welcome.count()) await welcome.locator('.popup-button-ok').click();
+        await reopened.waitForFunction(() => window.coreBridge?.isReady === true);
+        await reopened.evaluate(async ({ avatar, chatName }) => {
+            const script = await import('/script.js');
+            await script.selectCharacterById(script.characters.findIndex(character => character.avatar === avatar));
+            await script.openCharacterChat(chatName);
+        }, identity);
+        await reopened.evaluate(async () => {
+            const { getContext } = await import('/scripts/st-context.js');
+            await getContext().bindCoreState({ bootstrap: false });
+        });
+        await expect(reopened.locator('#chat .mes_text').filter({ hasText: reply })).toHaveCount(1);
+        await expect(reopened.locator('#mes_stop')).toBeHidden();
+        await expect.poll(async () => reopened.evaluate((expectedReply) => window.SillyTavern.getContext().chat.filter(message => message.mes === expectedReply).length, reply)).toBe(1);
+    } finally {
+        await reopened.close().catch(() => {});
+    }
+});
+
 async function openObserver(page, providerUrl, identity) {
     await testSetup.awaitST({ page });
     const welcome = page.locator('dialog[open]').filter({ hasText: 'Welcome to SillyTavern!' });

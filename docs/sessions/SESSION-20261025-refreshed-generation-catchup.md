@@ -46,8 +46,26 @@
 - `npm --prefix tests run test:unit -- generation-orchestrator.test.js bridge-client-generation.test.js core-bridge.test.js --runInBand --silent --verbose=false`：3 suites / 98 tests 通过。
 - `npm --prefix tests run test:e2e -- --config=playwright.core-handoff.config.js --grep "refreshed observer" --workers=1`：1 项通过。
 - `npm --prefix tests run test:e2e -- --config=playwright.core-handoff.config.js --grep "targeted Core WebSocket" --workers=1`：1 项通过。
-- `npm --prefix tests run test:e2e -- --config=playwright.core-handoff.config.js --workers=1`：8 项通过。
-- `npm --prefix tests run test:unit -- --runInBand --silent --verbose=false`：29 suites / 632 tests 通过。
+- `npm --prefix tests run test:e2e -- --config=playwright.core-handoff.config.js --workers=1`：9 项通过。
+- `npm --prefix tests run test:unit -- --runInBand --silent --verbose=false`：29 suites / 634 tests 通过。
+
+## 目标收敛：手机关闭网页后继续生成
+
+用户最终目标明确为：手机发送消息后可以直接关闭网页，服务端继续完成生成并持久化；稍后重新打开网页和对应聊天，能够看到唯一的完整回复。
+
+为覆盖这个真实结果，新增 `closing the sending page` E2E：
+
+- 发送页在任务开始后直接关闭，不发送 abort。
+- provider 继续完成，服务端 Job 进入 `COMPLETED`，provider 请求数仍为 1。
+- 重新打开页面并进入同一聊天，恢复完整回复且不重复。
+
+过程中发现并修复一个实际根因：新页面启动时会短暂绑定欢迎页，旧 bootstrap 逻辑可能用欢迎页状态覆盖已经持久化的 Core 聊天。`BridgeClient.bootstrapOrRefreshBoundState()` 现在识别“浏览器临时欢迎页 + Core 已有非空 chatId”场景，优先保留服务器状态。
+
+新增测试后验证：
+
+- `npm --prefix tests run test:e2e -- --config=playwright.core-handoff.config.js --grep "closing the sending page" --workers=1`：1 项通过。
+- `npm --prefix tests run test:unit -- core-bridge.test.js generation-orchestrator.test.js --runInBand --silent --verbose=false`：2 suites / 72 tests 通过。
+- 最终真实 handoff 回归：9 项通过；最终完整单测：29 suites / 634 tests 通过。
 
 ## 后续验证与交付门禁
 

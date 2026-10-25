@@ -578,6 +578,18 @@ export class BridgeClient {
             return;
         }
 
+        // During a fresh page boot the native UI briefly binds its welcome
+        // chat before the requested character chat is opened. If Core already
+        // owns a persisted chat, that transient empty binding must not
+        // bootstrap over it and erase a completed background generation.
+        const browserIsTransientWelcome = binding.snapshotMeta.chatId == null
+            && snapshot?.chatId != null
+            && Number(snapshot?.version) > 0;
+        if (browserIsTransientWelcome) {
+            this.applyStateSnapshot(snapshot, snapshot.version);
+            return;
+        }
+
         await this.bootstrapBoundState();
     }
 

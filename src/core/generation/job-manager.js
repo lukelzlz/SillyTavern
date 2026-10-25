@@ -676,7 +676,7 @@ export class JobManager extends EventEmitter {
                 return;
             }
 
-            if (job.chatId && String(session.activeChatId || '') !== String(job.chatId)) {
+            if (job.chatId && session.activeChatId && String(session.activeChatId) !== String(job.chatId)) {
                 console.warn(`[JobManager] Skipping settlement for job ${job.id}: active chat changed from ${job.chatId} to ${session.activeChatId || '(none)'}`);
                 if (typeof session.setGenerationState === 'function') {
                     session.setGenerationState('idle', null);
@@ -685,6 +685,17 @@ export class JobManager extends EventEmitter {
                     session.activeAbortController = null;
                 }
                 return;
+            }
+
+            // A browser can disappear immediately after starting a job. In
+            // that case the per-user session may no longer have an active chat
+            // identity even though the job carries the authoritative one.
+            // Restore only a missing identity; an explicit switch to another
+            // chat still takes the guarded rollback path above.
+            if (!session.activeChatId && job.chatId) {
+                session.activeChatId = String(job.chatId);
+                if (job.characterId) session.activeCharacterId = String(job.characterId);
+                if (job.characterName) session.activeCharacterName = String(job.characterName);
             }
 
             if (job.fullText && job.fullText.trim().length > 0) {

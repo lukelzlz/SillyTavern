@@ -861,6 +861,30 @@ describe('Generation Orchestrator & Server Job Manager Test Suite', () => {
             expect(session.generationState).toBe('idle');
         });
 
+        test('settles a completed job when the browser disconnect leaves no active chat identity', async () => {
+            const gateway = async (_req, res) => {
+                res.send({ choices: [{ message: { content: 'background response' } }] });
+            };
+            jobManager = new JobManager({
+                generateHandler: gateway,
+                sessionEngine: mockSessionEngine,
+                wsBridge: mockWsBridge,
+            });
+
+            const session = mockSessionEngine.getSession('alice');
+            const job = await jobManager.createJob({
+                userId: 'alice',
+                body: { chatId: 'chat-disconnected', characterId: '1', characterName: 'Seraphina' },
+                deferStart: true,
+            });
+            const completed = new Promise((resolve) => job.once('completed', resolve));
+            jobManager.startJob(job);
+            await completed;
+
+            expect(session.activeChatId).toBe('chat-disconnected');
+            expect(session.chat.map(message => message.mes)).toEqual(['background response']);
+        });
+
         test('Core generation marker reconciles an existing client placeholder without duplication', async () => {
             const session = mockSessionEngine.getSession('alice');
             const marker = 'core-client-generation-1';
