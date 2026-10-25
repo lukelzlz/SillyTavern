@@ -167,7 +167,12 @@ describe('Core P0 Security Bleeding Controls', () => {
         expect(content).toContain('const generate_url = \'/api/backends/chat-completions/generate\';');
         expect(content).not.toContain('? \'/api/core/chat-completions/generate\'');
         expect(content).toContain('coreBridge.startGenerationStream');
+        expect(content).toContain('coreBridge?.isReady');
+        expect(content).toContain('CORE_BRIDGE_NOT_READY');
         expect(content).toContain('core_generation_job_id');
+        expect(content).toContain('core_prompt_ready_handled');
+        expect(content).toContain("core_prompt_mode = 'client_final'");
+        expect(content).toContain('core_request_id');
     });
 
     test('openai.js restores native in-place CHAT_COMPLETION_PROMPT_READY event emission', () => {
@@ -178,10 +183,20 @@ describe('Core P0 Security Bleeding Controls', () => {
         expect(content).toContain('await eventSource.emit(event_types.CHAT_COMPLETION_PROMPT_READY, eventData);');
     });
 
-    test('bridge-client.js halts reconnection loop to prevent log spamming', () => {
+    test('bridge-client.js retries transient disconnects with bounded backoff', () => {
         const clientScriptPath = path.resolve(process.cwd(), '../public/scripts/core/bridge-client.js');
         const content = fs.readFileSync(clientScriptPath, 'utf8');
 
-        expect(content).toContain('this.reconnectAttempts >= 1');
+        expect(content).toContain('Math.min(attempt + 1, 8)');
+        expect(content).toContain('Math.min(2000 * (2 ** attempt), 30000)');
+    });
+
+    test('bridge-client waits for the authenticated handshake before starting Core jobs', () => {
+        const clientScriptPath = path.resolve(process.cwd(), '../public/scripts/core/bridge-client.js');
+        const content = fs.readFileSync(clientScriptPath, 'utf8');
+
+        expect(content).toContain('this.isReady = false');
+        expect(content).toContain('await this.waitUntilReady(timeoutMs);');
+        expect(content).toContain("this.connectionState = 'READY'");
     });
 });

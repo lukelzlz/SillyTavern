@@ -7,6 +7,7 @@ import ticketManager from './ticket-manager.js';
 import { getConfigValue } from '../util.js';
 import storage from 'node-persist';
 import { getUserDirectories } from '../users.js';
+import SessionPersistence from './session-persistence.js';
 
 const KEY_PREFIX = 'user:';
 function toKey(handle) {
@@ -62,18 +63,21 @@ export class WebSocketBridge {
         });
         /** @type {Map<string, Set<import('ws').WebSocket>>} userId -> Set<WebSocket> */
         this.userClients = new Map();
-        /** @type {Map<string, { userId: string, resolve: Function, timer: NodeJS.Timeout }>} interceptId -> resolver */
+        /** @type {Map<string, { userId: string, ws: import('ws').WebSocket|null, jobId: string|null, coreRequestId: string|null, resolve: Function, timer: NodeJS.Timeout }>} interceptId -> resolver */
         this.pendingInterceptions = new Map();
+        this.sessionPersistence = new SessionPersistence();
 
         this.#setupWss();
         this.#bindSessionEngine();
     }
 
     #setupWss() {
-        this.wss.on('connection', (ws, _request, { userHandle } = {}) => {
+        this.wss.on('connection', async (ws, _request, { userHandle } = {}) => {
             const userId = userHandle || 'default';
             ws.userId = userId;
             ws.isAlive = true;
+            const session = sessionEngine.getSession(userId);
+            ws.sessionHydration = this.sessionPersistence.hydrate(userId, session);
 
             let clients = this.userClients.get(userId);
             if (!clients) {
@@ -87,6 +91,7 @@ export class WebSocketBridge {
             });
 
             ws.on('message', async (data) => {
+                await ws.sessionHydration;
                 // Fail-closed verification: check if user still valid before handling message
                 if (userId !== 'default') {
                     const valid = await this.#verifyUserValid(userId);
@@ -108,12 +113,30 @@ export class WebSocketBridge {
                 }
             });
 
-            // Send initial handshake frame bound to authenticated user
+            // Send initial handshake frame bound to authenticated user after durable state hydration.
+            await ws.sessionHydration;
+            if (ws.readyState !== 1) {
+                return;
+            }
+            let activeJob = null;
+            try {
+                const { jobManager } = await import('./generation/job-manager.js');
+                activeJob = jobManager.getActiveJob(userId)?.toJSON() || null;
+            } catch {
+                // The bridge remains usable when the optional generation
+                // manager cannot be loaded during an isolated test startup.
+            }
             ws.send(JSON.stringify({
                 type: 'handshake',
                 status: 'authenticated',
                 userId,
-                summary: sessionEngine.getSession(userId).getSummary(),
+                summary: session.getSummary(),
+                capabilities: {
+                    orchestrator: getCoreConfig('core.generation.orchestratorEnabled', true, 'boolean'),
+                    serverPromptAssembly: getCoreConfig('core.generation.serverPromptAssemblyEnabled', true, 'boolean'),
+                    promptInterception: getCoreConfig('core.generation.pluginInterceptionEnabled', false, 'boolean'),
+                },
+                activeJob,
             }));
         });
 
@@ -159,6 +182,10 @@ export class WebSocketBridge {
             sessionEngine.on(eventName, (payload) => {
                 const userId = payload?.userId || 'default';
                 this.broadcastEvent(userId, eventName, payload);
+
+                if (eventName === 'state:patch') {
+                    this.sessionPersistence.scheduleSave(userId, sessionEngine.getSession(userId));
+                }
 
                 // Preserve the historical event name consumed by extensions.
                 if (eventName === 'message:appended') {
@@ -394,9 +421,13 @@ export class WebSocketBridge {
             }
 
             if (type === 'intercept_ack') {
-                const { interceptId, payload } = msg;
+                const { interceptId, payload, jobId, coreRequestId } = msg;
                 const pending = this.pendingInterceptions.get(interceptId);
-                if (pending && pending.userId === ws.userId) {
+                if (pending
+                    && pending.userId === ws.userId
+                    && (!pending.ws || pending.ws === ws)
+                    && (!pending.jobId || pending.jobId === jobId)
+                    && (!pending.coreRequestId || pending.coreRequestId === coreRequestId)) {
                     clearTimeout(pending.timer);
                     this.pendingInterceptions.delete(interceptId);
                     pending.resolve(payload);
@@ -409,6 +440,7 @@ export class WebSocketBridge {
                     ws.send(JSON.stringify({
                         type: 'job:failed',
                         requestId: id,
+                        errorCode: 'ORCHESTRATOR_DISABLED',
                         error: 'Generation orchestrator is disabled.',
                     }));
                     return;
@@ -416,16 +448,25 @@ export class WebSocketBridge {
 
                 try {
                     const { jobManager } = await import('./generation/job-manager.js');
+                    let userDirectories = {};
+                    try {
+                        userDirectories = getUserDirectories(ws.userId);
+                    } catch {
+                        // Unit/in-process callers may not initialize DATA_ROOT;
+                        // the mature gateway will still receive the authenticated
+                        // profile, while production startup always provides dirs.
+                    }
                     const syntheticReq = {
                         user: {
                             profile: {
                                 handle: ws.userId,
                                 enabled: true,
                             },
-                            directories: getUserDirectories(ws.userId),
+                            directories: userDirectories,
                         },
                         headers: {},
                         session: {},
+                        coreBridgeSocket: ws,
                     };
                     const job = await jobManager.createJob({
                         userId: ws.userId,
@@ -444,6 +485,7 @@ export class WebSocketBridge {
                     ws.send(JSON.stringify({
                         type: 'job:failed',
                         requestId: id,
+                        errorCode: err.name === 'InvalidGenerationRequestError' ? 'INVALID_GENERATION_REQUEST' : undefined,
                         error: err.message || 'Failed to start generation job',
                     }));
                 }
@@ -520,7 +562,19 @@ export class WebSocketBridge {
                         jobId: job.id,
                         fromSeq: catchup.fromSeq,
                         toSeq: catchup.toSeq,
+                        minSeq: catchup.minSeq,
+                        maxSeq: catchup.maxSeq,
+                        hasMissedChunks: catchup.hasMissedChunks,
                         chunks: catchup.chunks,
+                        status: job.status,
+                        fullText: job.fullText,
+                        lastSeq: job.lastSeq,
+                        error: job.error,
+                        abortReason: job.abortReason,
+                        reasoningText: job.reasoningText,
+                        toolCallDeltas: job.toolCallDeltas,
+                        tokenStats: job.tokenStats,
+                        finishReason: job.finishReason,
                     }));
                 } else if (!job) {
                     ws.send(JSON.stringify({
@@ -629,9 +683,10 @@ export class WebSocketBridge {
      * @param {string} eventName
      * @param {any} payload
      * @param {number} [timeoutMs=3000]
+     * @param {{ targetWs?: import('ws').WebSocket|null, jobId?: string|null, coreRequestId?: string|null }} [options]
      * @returns {Promise<any>}
      */
-    requestInterception(userId, eventName, payload, timeoutMs = 3000) {
+    requestInterception(userId, eventName, payload, timeoutMs = 3000, { targetWs = null, jobId = null, coreRequestId = null } = {}) {
         const clients = this.userClients.get(userId);
         if (!clients || clients.size === 0) {
             // No client connected to intercept, proceed immediately
@@ -643,6 +698,8 @@ export class WebSocketBridge {
             type: 'intercept_req',
             interceptId,
             event: eventName,
+            jobId,
+            coreRequestId,
             payload,
         });
 
@@ -653,14 +710,19 @@ export class WebSocketBridge {
                 resolve(payload);
             }, timeoutMs);
 
-            this.pendingInterceptions.set(interceptId, { userId, resolve, timer });
-
-            // Send to the first active client for the user (primary UI)
-            for (const ws of clients) {
-                if (ws.readyState === ws.OPEN) {
-                    ws.send(msg);
-                    break;
-                }
+            const destination = targetWs && clients.has(targetWs)
+                ? targetWs
+                : [...clients].find((client) => client.readyState === client.OPEN);
+            this.pendingInterceptions.set(interceptId, {
+                userId,
+                ws: destination || targetWs,
+                jobId,
+                coreRequestId,
+                resolve,
+                timer,
+            });
+            if (destination) {
+                destination.send(msg);
             }
         });
     }
@@ -679,6 +741,9 @@ export class WebSocketBridge {
         }
         this.userClients.clear();
         this.pendingInterceptions.clear();
+        this.sessionPersistence.close().catch((error) => {
+            console.warn('[WS Bridge] Failed to flush core session persistence:', error.message || error);
+        });
         this.wss.close();
     }
 }

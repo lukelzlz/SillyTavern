@@ -5,9 +5,17 @@ import { GenerationJob, JOB_STATUS } from './job.js';
 import { SyntheticResponse, createSyntheticRequest } from './synthetic-response.js';
 import defaultSessionEngine from '../session-engine.js';
 import defaultWsBridge from '../ws-bridge.js';
-import { getConfigValue, setConfigFilePath } from '../../util.js';
+import { PromptAssembler } from '../prompt/prompt-assembler.js';
+import { getConfigFilePath, getConfigValue, setConfigFilePath } from '../../util.js';
 
 let defaultGenerateHandlerPromise = null;
+
+function invalidGenerationRequest(message) {
+    const error = new Error(message);
+    error.name = 'InvalidGenerationRequestError';
+    Object.assign(error, { status: 400, statusCode: 400 });
+    return error;
+}
 
 /**
  * Lazily loads the mature chat-completions gateway with config fallback.
@@ -20,7 +28,9 @@ export async function getDefaultGenerateHandler() {
                 try {
                     const currentDir = path.dirname(fileURLToPath(import.meta.url));
                     const defaultConfigPath = path.resolve(currentDir, '../../../default/config.yaml');
-                    setConfigFilePath(defaultConfigPath);
+                    if (!getConfigFilePath()) {
+                        setConfigFilePath(defaultConfigPath);
+                    }
                 } catch {
                     // Ignore if already set
                 }
@@ -93,6 +103,8 @@ export class JobManager extends EventEmitter {
 
         /** @type {Map<string, GenerationJob>} All jobs in memory indexed by Job ID */
         this.jobs = new Map();
+        /** @type {Map<string, string>} User/request idempotency key -> Job ID */
+        this.requestJobs = new Map();
 
         /** @type {NodeJS.Timeout|null} Periodic GC timer */
         this._gcTimer = setInterval(() => {
@@ -126,6 +138,15 @@ export class JobManager extends EventEmitter {
      */
     getPluginInterceptionTimeoutMs() {
         return getGenerationConfig('core.generation.pluginInterceptionTimeoutMs', 3000, 'number');
+    }
+
+    /**
+     * Whether jobs carrying an explicit canonical prompt context should be
+     * assembled by the server before plugin interception and gateway dispatch.
+     * @returns {boolean}
+     */
+    isServerPromptAssemblyEnabled() {
+        return getGenerationConfig('core.generation.serverPromptAssemblyEnabled', true, 'boolean');
     }
 
     /**
@@ -183,6 +204,64 @@ export class JobManager extends EventEmitter {
     }
 
     /**
+     * Returns the explicit prompt ownership mode for a request. Legacy jobs
+     * without a mode retain their previous behavior.
+     * @param {object} body
+     * @returns {'client_final'|'server_context'|'legacy'}
+     */
+    getPromptMode(body = {}) {
+        if (body?.core_prompt_mode === 'client_final' || body?.core_prompt_mode === 'server_context') {
+            return body.core_prompt_mode;
+        }
+        if (body?.core_prompt_context && typeof body.core_prompt_context === 'object' && !Array.isArray(body.core_prompt_context)) {
+            return 'server_context';
+        }
+        return 'legacy';
+    }
+
+    /**
+     * Validates the mutually exclusive prompt ownership contract.
+     * @param {object} body
+     * @private
+     */
+    validateGenerationBody(body = {}) {
+        const explicitMode = body?.core_prompt_mode;
+        if (explicitMode !== undefined && !['client_final', 'server_context'].includes(explicitMode)) {
+            throw invalidGenerationRequest(`Unsupported core prompt mode: ${String(explicitMode)}`);
+        }
+
+        const mode = this.getPromptMode(body);
+        const hasContext = Boolean(body?.core_prompt_context && typeof body.core_prompt_context === 'object' && !Array.isArray(body.core_prompt_context));
+        const hasMessages = Array.isArray(body?.messages);
+
+        if (mode === 'server_context' && !hasContext) {
+            throw invalidGenerationRequest('server_context prompt mode requires core_prompt_context.');
+        }
+
+        if (mode === 'client_final' && hasContext) {
+            throw invalidGenerationRequest('client_final prompt mode cannot include core_prompt_context.');
+        }
+
+        if (mode === 'client_final' && !hasMessages) {
+            throw invalidGenerationRequest('client_final prompt mode requires messages.');
+        }
+    }
+
+    /**
+     * Builds a stable per-user request idempotency key.
+     * @param {string} userId
+     * @param {object} body
+     * @returns {string|null}
+     * @private
+     */
+    getRequestKey(userId, body = {}) {
+        if (typeof body?.core_request_id !== 'string' || body.core_request_id.trim().length === 0) {
+            return null;
+        }
+        return `${String(userId || 'default')}:${body.core_request_id}`;
+    }
+
+    /**
      * Creates and starts a new generation job in the background.
      * Enforces fail-closed concurrency lock: single active job per user.
      * @param {object} options
@@ -194,6 +273,18 @@ export class JobManager extends EventEmitter {
      */
     async createJob({ userId = 'default', body = {}, req = null, deferStart = false } = {}) {
         const normalizedUser = String(userId || 'default');
+        const requestBody = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
+        this.validateGenerationBody(requestBody);
+
+        const requestKey = this.getRequestKey(normalizedUser, requestBody);
+        if (requestKey) {
+            const existingJobId = this.requestJobs.get(requestKey);
+            const existingJob = existingJobId ? this.jobs.get(existingJobId) : null;
+            if (existingJob) {
+                return existingJob;
+            }
+            this.requestJobs.delete(requestKey);
+        }
 
         // Fail-Closed Concurrency Guard (Active Job Limit = 1)
         if (this.hasActiveJob(normalizedUser)) {
@@ -209,14 +300,17 @@ export class JobManager extends EventEmitter {
         const capacity = this.getRingBufferSize();
         const job = new GenerationJob({
             userId: normalizedUser,
-            chatId: body?.chatId || null,
-            characterId: body?.characterId || null,
-            characterName: body?.characterName || null,
-            requestBody: body || {},
+            chatId: requestBody?.chatId || null,
+            characterId: requestBody?.characterId || null,
+            characterName: requestBody?.characterName || null,
+            requestBody,
             capacity,
         });
 
         this.jobs.set(job.id, job);
+        if (requestKey) {
+            this.requestJobs.set(requestKey, job.id);
+        }
         this.activeUserJobs.set(normalizedUser, job.id);
 
         this._bindJobEvents(job);
@@ -279,6 +373,27 @@ export class JobManager extends EventEmitter {
             this.emit('token', { job, chunk });
         });
 
+        job.on('reasoning', (data) => {
+            if (this.wsBridge) {
+                this.wsBridge.broadcastEvent(userId, 'generation:reasoning', data);
+            }
+            this.emit('reasoning', { job, ...data });
+        });
+
+        job.on('toolCall', (data) => {
+            if (this.wsBridge) {
+                this.wsBridge.broadcastEvent(userId, 'generation:tool_call', data);
+            }
+            this.emit('toolCall', { job, ...data });
+        });
+
+        job.on('usage', (data) => {
+            if (this.wsBridge) {
+                this.wsBridge.broadcastEvent(userId, 'generation:usage', data);
+            }
+            this.emit('usage', { job, ...data });
+        });
+
         // Successful completion
         job.on('completed', (data) => {
             this._releaseUserLock(userId, job.id);
@@ -288,13 +403,21 @@ export class JobManager extends EventEmitter {
                 this.wsBridge.broadcastEvent(userId, 'generation:completed', {
                     jobId: job.id,
                     fullText: data.fullText,
+                    lastSeq: job.lastSeq,
                     tokenStats: data.tokenStats,
+                    reasoningText: data.reasoningText,
+                    toolCallDeltas: data.toolCallDeltas,
+                    finishReason: data.finishReason,
                 });
                 this.wsBridge.broadcastEvent(userId, 'job:completed', {
                     type: 'job:completed',
                     jobId: job.id,
                     fullText: data.fullText,
+                    lastSeq: job.lastSeq,
                     tokenStats: data.tokenStats,
+                    reasoningText: data.reasoningText,
+                    toolCallDeltas: data.toolCallDeltas,
+                    finishReason: data.finishReason,
                 });
             }
             this.emit('completed', { job, ...data });
@@ -324,7 +447,7 @@ export class JobManager extends EventEmitter {
         // Job failure
         job.on('failed', (data) => {
             this._releaseUserLock(userId, job.id);
-            this._settleSession(job);
+            this._rollbackSession(job);
 
             if (this.wsBridge) {
                 this.wsBridge.broadcastEvent(userId, 'generation:failed', {
@@ -369,32 +492,53 @@ export class JobManager extends EventEmitter {
         if (this.sessionEngine) {
             try {
                 const session = this.sessionEngine.getSession(job.userId);
-                session.generationState = 'generating';
-                session.activeAbortController = job.abortController;
+                if (typeof session.setGenerationState === 'function') {
+                    session.setGenerationState('generating', job.abortController);
+                } else {
+                    session.generationState = 'generating';
+                    session.activeAbortController = job.abortController;
+                }
             } catch {
                 // Ignore if session engine lookup fails
             }
         }
 
+        await this._preparePrompt(job);
+
         // Step 2: INTERCEPTING_PLUGINS (Optional plugin handshake with 3000ms timeout guard)
         const pluginInterceptionEnabled = getGenerationConfig('core.generation.pluginInterceptionEnabled', false, 'boolean');
-        if (pluginInterceptionEnabled && this.wsBridge && Array.isArray(job.requestBody?.messages)) {
+        const promptMode = this.getPromptMode(job.requestBody);
+        if (pluginInterceptionEnabled
+            && promptMode !== 'client_final'
+            && !job.requestBody?.core_prompt_ready_handled
+            && this.wsBridge
+            && Array.isArray(job.requestBody?.messages)) {
             try {
                 job.transition(JOB_STATUS.INTERCEPTING_PLUGINS);
                 const timeoutMs = this.getPluginInterceptionTimeoutMs();
 
                 const modifiedPrompt = await this.wsBridge.requestInterception(
                     job.userId,
-                    'job:plugin_intercept',
+                    'chat_completion_prompt_ready',
                     {
                         jobId: job.id,
-                        prompt: job.requestBody.messages,
+                        chat: job.requestBody.messages,
+                        dryRun: false,
                     },
                     timeoutMs,
+                    {
+                        targetWs: originalReq?.coreBridgeSocket || null,
+                        jobId: job.id,
+                        coreRequestId: typeof job.requestBody?.core_request_id === 'string'
+                            ? job.requestBody.core_request_id
+                            : null,
+                    },
                 );
 
                 if (Array.isArray(modifiedPrompt)) {
                     job.requestBody.messages = modifiedPrompt;
+                } else if (Array.isArray(modifiedPrompt?.chat)) {
+                    job.requestBody.messages = modifiedPrompt.chat;
                 }
             } catch (pluginErr) {
                 console.warn(`[JobManager] Plugin interception failed for job ${job.id}, falling back:`, pluginErr);
@@ -427,6 +571,40 @@ export class JobManager extends EventEmitter {
             throw new Error('Chat completions generator handler unavailable.');
         }
         await handler(syntheticReq, syntheticRes);
+    }
+
+    /**
+     * Optionally assembles a canonical server-owned prompt. Jobs without an
+     * explicit context retain the existing client-prepared request path so
+     * legacy HTTP callers remain compatible during the migration.
+     * @param {GenerationJob} job
+     * @returns {Promise<void>}
+     * @private
+     */
+    async _preparePrompt(job) {
+        if (!this.isServerPromptAssemblyEnabled()) {
+            return;
+        }
+
+        if (job.requestBody?.core_prompt_ready_handled || this.getPromptMode(job.requestBody) === 'client_final') {
+            // The browser already owns the prompt-ready lifecycle for this
+            // request. Do not rebuild its final prompt underneath an already
+            // executed client plugin hook.
+            return;
+        }
+
+        const context = job.requestBody?.core_prompt_context;
+        if (!context || typeof context !== 'object' || Array.isArray(context)) {
+            return;
+        }
+
+        const assembled = await PromptAssembler.assemble(context);
+        if (!Array.isArray(assembled?.chat)) {
+            throw new Error('Server prompt assembly did not return a chat message array.');
+        }
+
+        job.requestBody.messages = assembled.chat;
+        job.requestBody.core_prompt_metadata = assembled.metadata || null;
     }
 
     /**
@@ -479,6 +657,17 @@ export class JobManager extends EventEmitter {
                 return;
             }
 
+            if (job.chatId && String(session.activeChatId || '') !== String(job.chatId)) {
+                console.warn(`[JobManager] Skipping settlement for job ${job.id}: active chat changed from ${job.chatId} to ${session.activeChatId || '(none)'}`);
+                if (typeof session.setGenerationState === 'function') {
+                    session.setGenerationState('idle', null);
+                } else {
+                    session.generationState = 'idle';
+                    session.activeAbortController = null;
+                }
+                return;
+            }
+
             if (job.fullText && job.fullText.trim().length > 0) {
                 const characterName = job.characterName || session.activeCharacterName || 'Assistant';
                 const generationMarker = typeof job.requestBody?.core_generation_job_id === 'string'
@@ -504,10 +693,51 @@ export class JobManager extends EventEmitter {
                 }
             }
 
-            session.generationState = 'idle';
-            session.activeAbortController = null;
+            if (typeof session.setGenerationState === 'function') {
+                session.setGenerationState('idle', null);
+            } else {
+                session.generationState = 'idle';
+                session.activeAbortController = null;
+            }
         } catch (err) {
             console.error(`[JobManager] Failed to settle session for job ${job.id}:`, err);
+        }
+    }
+
+    /**
+     * Rolls back a failed generation without persisting partial assistant
+     * text. A client-created placeholder is removed when it carries the
+     * generation marker; successful and explicitly aborted jobs use the
+     * normal settlement path above.
+     * @param {GenerationJob} job
+     * @private
+     */
+    _rollbackSession(job) {
+        if (!this.sessionEngine) {
+            return;
+        }
+
+        try {
+            const session = this.sessionEngine.getSession(job.userId);
+            const chatMatches = !job.chatId || String(session.activeChatId || '') === String(job.chatId);
+            const generationMarker = typeof job.requestBody?.core_generation_job_id === 'string'
+                ? job.requestBody.core_generation_job_id
+                : null;
+            if (generationMarker && chatMatches) {
+                const existingIndex = session.chat.findLastIndex((item) => item?.extra?.core_generation_job_id === generationMarker);
+                if (existingIndex >= 0) {
+                    session.deleteMessage(existingIndex);
+                }
+            }
+
+            if (typeof session.setGenerationState === 'function') {
+                session.setGenerationState('idle', null);
+            } else {
+                session.generationState = 'idle';
+                session.activeAbortController = null;
+            }
+        } catch (err) {
+            console.error(`[JobManager] Failed to rollback session for job ${job.id}:`, err);
         }
     }
 
@@ -521,6 +751,10 @@ export class JobManager extends EventEmitter {
         for (const [id, job] of this.jobs.entries()) {
             if (job.isTerminal() && job.completedAt && (now - job.completedAt > retentionMs)) {
                 this.jobs.delete(id);
+                const requestKey = this.getRequestKey(job.userId, job.requestBody);
+                if (requestKey && this.requestJobs.get(requestKey) === id) {
+                    this.requestJobs.delete(requestKey);
+                }
                 this._releaseUserLock(job.userId, id);
             }
         }
@@ -540,6 +774,7 @@ export class JobManager extends EventEmitter {
             }
         }
         this.jobs.clear();
+        this.requestJobs.clear();
         this.activeUserJobs.clear();
     }
 }

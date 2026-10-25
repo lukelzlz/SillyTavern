@@ -229,15 +229,23 @@ implementationBranch: feat/generation-orchestrator
 1. **发起生成 (`generate:start`)**:
    ```json
    {
-     "type": "generate:start",
-     "payload": {
-       "chatId": "chat-2026-10-20-001",
-       "characterId": "chara_alice",
+      "type": "generate:start",
+      "payload": {
+        "core_request_id": "req_2026-10-20-001",
+        "core_prompt_mode": "client_final",
+        "chatId": "chat-2026-10-20-001",
+        "characterId": "chara_alice",
        "generationParams": { "max_tokens": 1024, "temperature": 0.8 },
        "streaming": true
-     }
-   }
-   ```
+      }
+    }
+    ```
+
+   Prompt ownership is explicit: `client_final` means the browser has already
+   assembled and plugin-processed `messages`; `server_context` means the
+   payload carries `core_prompt_context` and the server owns PromptAssembler
+   plus the single plugin interception round-trip. Legacy jobs without this
+   field retain the historical compatibility path.
 2. **主动中止 (`generate:abort`)**:
    ```json
    {
@@ -357,6 +365,8 @@ core:
     orchestratorEnabled: true
     # 插件拦截最大等待超时 (毫秒)
     pluginInterceptionTimeoutMs: 3000
+    # 对携带 core_prompt_context 的无头任务启用服务端 PromptAssembler 装配
+    serverPromptAssemblyEnabled: true
     # 单任务环形流式缓冲区最大保留 chunk 数量
     streamChunkRingBufferSize: 2048
     # 任务完成后在内存中的保留清理周期 (秒)

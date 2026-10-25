@@ -64,6 +64,53 @@ export function extractDelta(data) {
 }
 
 /**
+ * Extracts provider reasoning/thinking text without mixing it into visible
+ * assistant content.
+ * @param {any} data
+ * @returns {string}
+ */
+export function extractReasoningDelta(data) {
+    if (!data || typeof data !== 'object') {
+        return '';
+    }
+    if (typeof data.reasoning_content === 'string') return data.reasoning_content;
+    if (typeof data.reasoning === 'string') return data.reasoning;
+    if (typeof data.delta?.reasoning_content === 'string') return data.delta.reasoning_content;
+    if (typeof data.delta?.reasoning === 'string') return data.delta.reasoning;
+    if (typeof data.delta?.thinking === 'string') return data.delta.thinking;
+    if (typeof data.choices?.[0]?.delta?.reasoning_content === 'string') return data.choices[0].delta.reasoning_content;
+    if (typeof data.choices?.[0]?.delta?.reasoning === 'string') return data.choices[0].delta.reasoning;
+    if (typeof data.choices?.[0]?.delta?.thinking === 'string') return data.choices[0].delta.thinking;
+    if (Array.isArray(data.candidates)) {
+        return data.candidates[0]?.content?.parts
+            ?.filter((part) => part?.thought === true && typeof part?.text === 'string')
+            .map((part) => part.text)
+            .join('') || '';
+    }
+    return '';
+}
+
+/**
+ * Extracts tool-call deltas from OpenAI-compatible provider chunks.
+ * @param {any} data
+ * @returns {object[]}
+ */
+export function extractToolCallDeltas(data) {
+    const toolCalls = data?.choices?.[0]?.delta?.tool_calls;
+    return Array.isArray(toolCalls) ? toolCalls.filter((call) => call && typeof call === 'object') : [];
+}
+
+/**
+ * Extracts a provider finish reason when present.
+ * @param {any} data
+ * @returns {string|null}
+ */
+export function extractFinishReason(data) {
+    const reason = data?.choices?.[0]?.finish_reason ?? data?.finish_reason;
+    return typeof reason === 'string' ? reason : null;
+}
+
+/**
  * Extracts complete text from non-streaming response body.
  * @param {any} body
  * @returns {string}
@@ -242,17 +289,13 @@ export class SyntheticResponse extends Writable {
         }
 
         // Success non-streaming completion
+        this._captureProviderMetadata(body);
         const text = extractFullTextFromBody(body);
         if (text) {
             this.job.appendChunk(text);
         }
 
-        const tokenStats = body?.usage ? {
-            promptTokens: body.usage.prompt_tokens,
-            completionTokens: body.usage.completion_tokens,
-        } : undefined;
-
-        this.job.complete(tokenStats);
+        this.job.complete();
         this.emit('finish');
         return this;
     }
@@ -307,12 +350,7 @@ export class SyntheticResponse extends Writable {
 
                 try {
                     const parsed = JSON.parse(dataPayload);
-
-                    if (parsed?.usage) {
-                        this.job.tokenStats.promptTokens = parsed.usage.prompt_tokens || this.job.tokenStats.promptTokens;
-                        this.job.tokenStats.completionTokens = parsed.usage.completion_tokens || this.job.tokenStats.completionTokens;
-                    }
-
+                    this._captureProviderMetadata(parsed);
                     const delta = extractDelta(parsed);
                     if (delta) {
                         this.job.appendChunk(delta);
@@ -361,6 +399,7 @@ export class SyntheticResponse extends Writable {
             if (dataPayload && dataPayload !== '[DONE]') {
                 try {
                     const parsed = JSON.parse(dataPayload);
+                    this._captureProviderMetadata(parsed);
                     const delta = extractDelta(parsed);
                     if (delta) {
                         this.job.appendChunk(delta);
@@ -376,6 +415,34 @@ export class SyntheticResponse extends Writable {
         }
 
         callback();
+    }
+
+    /**
+     * Captures provider metadata shared by streaming and non-streaming paths.
+     * @param {any} parsed
+     * @private
+     */
+    _captureProviderMetadata(parsed) {
+        if (!parsed || typeof parsed !== 'object') {
+            return;
+        }
+        if (parsed.usage) {
+            this.job.recordUsage(parsed.usage);
+        }
+
+        const reasoning = extractReasoningDelta(parsed);
+        if (reasoning) {
+            this.job.appendReasoning(reasoning);
+        }
+
+        for (const toolCall of extractToolCallDeltas(parsed)) {
+            this.job.appendToolCall(toolCall);
+        }
+
+        const finishReason = extractFinishReason(parsed);
+        if (finishReason) {
+            this.job.finishReason = finishReason;
+        }
     }
 }
 
@@ -405,8 +472,23 @@ export function createSyntheticRequest(job, originalReq = {}) {
     };
     const userDirectories = originalReq?.user?.directories || {};
 
+    const body = { ...job.requestBody };
+    // These fields are orchestration metadata, not provider request
+    // parameters. Keep them available on GenerationJob for settlement and
+    // diagnostics, but never leak them into the mature gateway.
+    delete body.core_generation_job_id;
+    delete body.core_request_id;
+    delete body.core_prompt_mode;
+    delete body.chatId;
+    delete body.characterId;
+    delete body.characterName;
+    delete body.core_state_version;
+    delete body.core_prompt_ready_handled;
+    delete body.core_prompt_context;
+    delete body.core_prompt_metadata;
+
     return {
-        body: { ...job.requestBody },
+        body,
         user: {
             profile: userProfile,
             directories: userDirectories,

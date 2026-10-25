@@ -3150,7 +3150,7 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
     // enabled, route the safe plain-text streaming subset through the server
     // orchestrator so the upstream request survives browser disconnects.
     const canUseCoreGeneration = stream
-        && coreBridge?.isConnected
+        && coreBridge?.isReady
         && !canMultiSwipe
         && !generate_data.tools
         && !generate_data.json_schema
@@ -3159,32 +3159,67 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
 
     if (canUseCoreGeneration) {
         const coreGenerationJobId = `core-${uuidv4()}`;
+        const coreRequestId = uuidv4();
         generate_data.core_generation_job_id = coreGenerationJobId;
+        generate_data.core_request_id = coreRequestId;
+        generate_data.core_prompt_mode = 'client_final';
+        generate_data.chatId = getCurrentChatId() || null;
+        generate_data.characterId = this_chid || null;
+        generate_data.characterName = name2 || null;
+        // The browser has already emitted CHAT_COMPLETION_PROMPT_READY while
+        // assembling this request. Mark the payload so the server orchestrator
+        // does not invoke the same side-effectful plugin hook a second time.
+        generate_data.core_prompt_ready_handled = true;
 
-        const { stream: coreStream } = await coreBridge.startGenerationStream(
-            generate_data,
-            5000,
-            signal,
-        );
-
-        const bridgedStream = async function* () {
-            for await (const item of coreStream) {
-                yield {
-                    text: item.data?.fullText || '',
-                    swipes: [],
-                    logprobs: [],
-                    toolCalls: [],
-                    state: {
-                        reasoning: '',
-                        images: [],
-                        signature: '',
-                    },
-                };
+        let coreStream;
+        try {
+            ({ stream: coreStream } = await coreBridge.startGenerationStream(
+                generate_data,
+                5000,
+                signal,
+            ));
+        } catch (error) {
+            if (!['CORE_GENERATION_DISABLED', 'CORE_BRIDGE_UNAVAILABLE', 'CORE_BRIDGE_NOT_READY'].includes(error?.code)) {
+                throw error;
             }
-        };
+            // Keep the native HTTP path as the rollback contract when the
+            // optional Core transport is disabled, disconnected, or has not
+            // completed its authenticated handshake yet.
+            coreStream = null;
+        }
 
-        bridgedStream.coreGenerationJobId = coreGenerationJobId;
-        return bridgedStream;
+        if (!coreStream) {
+            delete generate_data.core_generation_job_id;
+            delete generate_data.core_request_id;
+            delete generate_data.core_prompt_mode;
+            delete generate_data.chatId;
+            delete generate_data.characterId;
+            delete generate_data.characterName;
+            delete generate_data.core_prompt_ready_handled;
+        } else {
+            const bridgedStream = async function* () {
+                for await (const item of coreStream) {
+                    yield {
+                        text: item.data?.fullText || '',
+                        swipes: [],
+                        logprobs: [],
+                        toolCalls: item.event === 'generation:tool_call'
+                            ? [item.data?.delta].filter(Boolean)
+                            : [],
+                        state: {
+                            reasoning: item.event === 'generation:reasoning'
+                                ? item.data?.fullText || ''
+                                : '',
+                            images: [],
+                            signature: '',
+                        },
+                    };
+                }
+            };
+
+            bridgedStream.coreGenerationJobId = coreGenerationJobId;
+            return bridgedStream;
+        }
     }
 
     const generate_url = '/api/backends/chat-completions/generate';

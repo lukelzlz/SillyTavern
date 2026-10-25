@@ -192,13 +192,6 @@ router.post('/generation/jobs', async (req, res) => {
             });
         }
 
-        if (jobManager.hasActiveJob(userId)) {
-            return res.status(409).json({
-                ok: false,
-                error: 'Another generation job is currently in progress.',
-            });
-        }
-
         const job = await jobManager.createJob({
             userId,
             body: req.body,
@@ -212,6 +205,12 @@ router.post('/generation/jobs', async (req, res) => {
             createdAt: job.createdAt,
         });
     } catch (err) {
+        if (err.statusCode === 400 || err.status === 400 || err.name === 'InvalidGenerationRequestError') {
+            return res.status(400).json({
+                ok: false,
+                error: err.message || 'Invalid generation request.',
+            });
+        }
         if (err.statusCode === 409 || err.status === 409 || err.name === 'ActiveJobConflictError') {
             return res.status(409).json({
                 ok: false,

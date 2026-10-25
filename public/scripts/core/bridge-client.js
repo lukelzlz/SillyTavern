@@ -1,6 +1,17 @@
 import { eventSource, token } from '../../script.js';
 
 /**
+ * Creates a typed bridge error that can be classified by callers without
+ * relying on the human-readable message.
+ * @param {string} message
+ * @param {string} code
+ * @returns {Error & { code: string }}
+ */
+function createBridgeError(message, code) {
+    return Object.assign(new Error(message), { code });
+}
+
+/**
  * BridgeClient handles WebSocket connection to the server Headless Core,
  * bridging server-side state, events, and intercept handshakes.
  */
@@ -9,6 +20,11 @@ export class BridgeClient {
         /** @type {WebSocket|null} */
         this.ws = null;
         this.isConnected = false;
+        this.isReady = false;
+        this.connectionState = 'DISCONNECTED';
+        this.capabilities = {};
+        /** @type {Array<{ resolve: Function, reject: Function, timer: NodeJS.Timeout }>} */
+        this.readyWaiters = [];
         this.reconnectAttempts = 0;
         this.reconnectTimer = null;
 
@@ -18,8 +34,10 @@ export class BridgeClient {
         /** @type {Map<string, { resolve: Function, reject: Function, timer: NodeJS.Timeout }>} */
         this.pendingJobRequests = new Map();
 
-        /** @type {Map<string, { enqueue: Function }>} */
+        /** @type {Map<string, { enqueue: Function, getLastSeq: Function, isInitialized: Function, timeoutMs: number, recoveryPromise: Promise|null }>} */
         this.generationListeners = new Map();
+        /** @type {object|null} Current server-reported active generation job. */
+        this.activeGenerationJob = null;
 
         /** @type {number} Number of server-originated events currently being projected. */
         this.remoteEventDepth = 0;
@@ -56,6 +74,7 @@ export class BridgeClient {
         }
 
         try {
+            this.connectionState = 'CONNECTING';
             // Request short-lived single-use ticket via protected HTTP POST
             const headers = { 'Content-Type': 'application/json' };
             if (token) {
@@ -68,15 +87,22 @@ export class BridgeClient {
             });
 
             if (!ticketRes.ok) {
-                // If core transport is disabled or unauthenticated, halt and fallback to native route
+                // A disabled/unauthenticated bridge is an intentional native
+                // transport fallback. Retry only transient server failures.
                 this.isConnected = false;
-                this.scheduleReconnect();
+                this.isReady = false;
+                this.connectionState = 'DISCONNECTED';
+                if (![401, 403].includes(ticketRes.status)) {
+                    this.scheduleReconnect();
+                }
                 return;
             }
 
             const ticketData = await ticketRes.json();
             if (!ticketData.ok || !ticketData.ticket) {
                 this.isConnected = false;
+                this.isReady = false;
+                this.connectionState = 'DISCONNECTED';
                 this.scheduleReconnect();
                 return;
             }
@@ -87,7 +113,11 @@ export class BridgeClient {
             this.ws.onopen = () => {
                 console.log('[Core Bridge] Connected to SillyTavern Headless Core');
                 this.isConnected = true;
+                this.isReady = false;
+                this.connectionState = 'OPEN';
+                this.capabilities = {};
                 this.reconnectAttempts = 0;
+                this.reconnectTimer = null;
                 if (this.stateBinding) {
                     const syncPromise = this.stateBinding.dirty
                         ? this.syncBoundState()
@@ -98,6 +128,9 @@ export class BridgeClient {
                         console.warn('[Core Bridge] Failed to refresh bound state:', error);
                     });
                 }
+                this.recoverGenerationListeners().catch((error) => {
+                    console.warn('[Core Bridge] Failed to recover generation streams:', error);
+                });
             };
 
             this.ws.onmessage = (event) => {
@@ -106,6 +139,16 @@ export class BridgeClient {
 
             this.ws.onclose = (event) => {
                 this.isConnected = false;
+                this.isReady = false;
+                this.connectionState = 'DISCONNECTED';
+                this.ws = null;
+                for (const waiter of this.readyWaiters.splice(0)) {
+                    clearTimeout(waiter.timer);
+                    waiter.reject(createBridgeError(
+                        '[Core Bridge] WebSocket disconnected before handshake completed',
+                        'CORE_BRIDGE_UNAVAILABLE',
+                    ));
+                }
                 for (const pending of this.pendingJobRequests.values()) {
                     clearTimeout(pending.timer);
                     pending.reject(new Error('[Core Bridge] WebSocket disconnected during generation operation'));
@@ -130,15 +173,18 @@ export class BridgeClient {
     }
 
     scheduleReconnect() {
-        if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-        // P0 Security: Stop reconnection when bridge upgrade is disabled/rejected to avoid log spam
-        if (this.reconnectAttempts >= 1) {
+        if (this.reconnectTimer) {
             return;
         }
-        this.reconnectAttempts++;
+        // Retry transient disconnects with bounded exponential backoff. The
+        // explicit 401/403 ticket path above intentionally does not retry.
+        const attempt = this.reconnectAttempts;
+        this.reconnectAttempts = Math.min(attempt + 1, 8);
+        const delay = Math.min(2000 * (2 ** attempt), 30000);
         this.reconnectTimer = setTimeout(() => {
+            this.reconnectTimer = null;
             this.connect();
-        }, 2000);
+        }, delay);
     }
 
     async handleMessage(rawData) {
@@ -167,7 +213,12 @@ export class BridgeClient {
                 clearTimeout(pending.timer);
                 this.pendingJobRequests.delete(msg.requestId);
                 if (msg.type === 'job:failed') {
-                    pending.reject(new Error(msg.error || 'Generation operation failed'));
+                    const error = new Error(msg.error || 'Generation operation failed');
+                    if (msg.errorCode === 'ORCHESTRATOR_DISABLED'
+                        || /orchestrator is disabled/i.test(String(msg.error || ''))) {
+                        Object.assign(error, { code: 'CORE_GENERATION_DISABLED' });
+                    }
+                    pending.reject(error);
                 } else {
                     pending.resolve(msg);
                 }
@@ -193,7 +244,7 @@ export class BridgeClient {
 
             // 3. Interception Request (e.g. CHAT_COMPLETION_PROMPT_READY)
             if (msg.type === 'intercept_req') {
-                const { interceptId, event, payload } = msg;
+                const { interceptId, event, payload, jobId, coreRequestId } = msg;
                 try {
                     if (eventSource && typeof eventSource.emit === 'function') {
                         // Pass payload to client plugins to examine/mutate
@@ -206,6 +257,8 @@ export class BridgeClient {
                     this.send({
                         type: 'intercept_ack',
                         interceptId,
+                        jobId,
+                        coreRequestId,
                         payload,
                     });
                 }
@@ -215,6 +268,20 @@ export class BridgeClient {
             // 4. Initial handshake
             if (msg.type === 'handshake') {
                 console.log('[Core Bridge] Handshake complete:', msg.summary);
+                this.capabilities = msg.capabilities || {};
+                this.isReady = true;
+                this.connectionState = 'READY';
+                for (const waiter of this.readyWaiters.splice(0)) {
+                    clearTimeout(waiter.timer);
+                    waiter.resolve();
+                }
+                this.recoverGenerationListeners().catch((error) => {
+                    console.warn('[Core Bridge] Failed to recover generation streams after handshake:', error);
+                });
+                this.activeGenerationJob = msg.activeJob || null;
+                if (this.activeGenerationJob && eventSource && typeof eventSource.emit === 'function') {
+                    await eventSource.emit('generation:active', this.activeGenerationJob);
+                }
             }
         } catch (e) {
             console.error('[Core Bridge] Error parsing message:', e);
@@ -385,6 +452,11 @@ export class BridgeClient {
                 }
                 break;
             }
+            case 'generationState':
+                // The generation lifecycle is server-owned. Keep the local
+                // projection's metadata aligned without exposing the server's
+                // AbortController or requiring a full snapshot refresh.
+                break;
             default:
                 return false;
         }
@@ -602,6 +674,37 @@ export class BridgeClient {
     }
 
     /**
+     * Waits until the authenticated handshake has completed.
+     * @param {number} [timeoutMs=5000]
+     * @returns {Promise<void>}
+     */
+    waitUntilReady(timeoutMs = 5000) {
+        if (this.isReady) {
+            return Promise.resolve();
+        }
+        if (!this.isConnected) {
+            return Promise.reject(createBridgeError(
+                '[Core Bridge] WebSocket is not connected',
+                'CORE_BRIDGE_UNAVAILABLE',
+            ));
+        }
+
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                const index = this.readyWaiters.findIndex((waiter) => waiter.resolve === resolve);
+                if (index >= 0) {
+                    this.readyWaiters.splice(index, 1);
+                }
+                reject(createBridgeError(
+                    `[Core Bridge] Handshake timed out after ${timeoutMs}ms`,
+                    'CORE_BRIDGE_NOT_READY',
+                ));
+            }, timeoutMs);
+            this.readyWaiters.push({ resolve, reject, timer });
+        });
+    }
+
+    /**
      * Starts a server-side background generation job.
      * @param {Record<string, unknown>} payload
      * @param {number} [timeoutMs=5000]
@@ -622,6 +725,7 @@ export class BridgeClient {
      * @returns {Promise<{ jobId: string, stream: AsyncGenerator }>}
      */
     async startGenerationStream(payload = {}, timeoutMs = 5000, signal = null) {
+        await this.waitUntilReady(timeoutMs);
         const created = await this.startGeneration(payload, timeoutMs);
         if (!created?.jobId) {
             throw new Error('[Core Bridge] Generation job did not return a job id');
@@ -646,12 +750,18 @@ export class BridgeClient {
             queue: [],
             waiters: [],
             lastEmittedText: '',
+            lastSeq: 0,
             terminal: false,
+            initialized: false,
         };
 
         const enqueue = (event, data) => {
             if (state.terminal) {
                 return;
+            }
+
+            if ((event === 'generation:token' || event === 'generation:completed') && Number.isFinite(Number(data?.seq))) {
+                state.lastSeq = Math.max(state.lastSeq, Number(data.seq));
             }
 
             const item = { event, data };
@@ -663,7 +773,13 @@ export class BridgeClient {
             }
         };
 
-        this.generationListeners.set(jobId, { enqueue });
+        this.generationListeners.set(jobId, {
+            enqueue,
+            getLastSeq: () => state.lastSeq,
+            isInitialized: () => state.initialized,
+            timeoutMs,
+            recoveryPromise: null,
+        });
 
         const waitForEvent = () => {
             if (state.queue.length > 0) {
@@ -673,6 +789,80 @@ export class BridgeClient {
             return new Promise((resolve) => {
                 state.waiters.push(resolve);
             });
+        };
+
+        const replayCatchup = function* (catchup) {
+            const chunks = Array.isArray(catchup?.chunks) ? catchup.chunks : [];
+            const fullText = typeof catchup?.fullText === 'string' ? catchup.fullText : '';
+
+            if (catchup?.hasMissedChunks && fullText) {
+                if (fullText !== state.lastEmittedText) {
+                    state.lastEmittedText = fullText;
+                    yield {
+                        event: 'generation:token',
+                        data: {
+                            jobId,
+                            seq: Number(catchup.lastSeq) || Number(catchup.maxSeq) || state.lastSeq,
+                            delta: fullText,
+                            fullText,
+                        },
+                    };
+                }
+                state.lastSeq = Math.max(state.lastSeq, Number(catchup.lastSeq) || Number(catchup.maxSeq) || 0);
+                return;
+            }
+
+            let replayText = state.lastEmittedText;
+            for (const chunk of chunks) {
+                const seq = Number(chunk?.seq) || 0;
+                if (seq <= state.lastSeq) {
+                    continue;
+                }
+                replayText += String(chunk?.delta || '');
+                state.lastSeq = Math.max(state.lastSeq, seq);
+                if (!replayText || replayText === state.lastEmittedText) {
+                    continue;
+                }
+                state.lastEmittedText = replayText;
+                yield {
+                    event: 'generation:token',
+                    data: {
+                        jobId,
+                        seq,
+                        delta: chunk.delta,
+                        fullText: replayText,
+                    },
+                };
+            }
+
+            if (fullText && fullText !== state.lastEmittedText) {
+                state.lastEmittedText = fullText;
+                yield {
+                    event: 'generation:token',
+                    data: {
+                        jobId,
+                        seq: Number(catchup.lastSeq) || Number(catchup.maxSeq) || state.lastSeq,
+                        delta: fullText,
+                        fullText,
+                    },
+                };
+            }
+        };
+
+        const finishCatchup = (catchup) => {
+            if (catchup?.status === 'COMPLETED') {
+                state.terminal = true;
+                return 'completed';
+            }
+            if (catchup?.status === 'ABORTED') {
+                state.terminal = true;
+                throw new Error(catchup.abortReason || 'Generation aborted');
+            }
+            if (catchup?.status === 'FAILED') {
+                state.terminal = true;
+                throw new Error(catchup.error || 'Generation failed');
+            }
+            return null;
         };
 
         const stream = (async function* () {
@@ -691,9 +881,17 @@ export class BridgeClient {
             try {
                 const snapshot = await client.getGenerationJob(jobId, 0);
                 const job = snapshot?.job;
-
-                if (job?.fullText) {
+                const catchup = await client.reconnectGeneration(jobId, 0, timeoutMs).catch(() => null);
+                if (catchup) {
+                    for (const item of replayCatchup(catchup)) {
+                        yield item;
+                    }
+                    if (finishCatchup(catchup) === 'completed') {
+                        return;
+                    }
+                } else if (job?.fullText) {
                     state.lastEmittedText = job.fullText;
+                    state.lastSeq = Number(job.lastSeq) || 0;
                     yield {
                         event: 'generation:token',
                         data: {
@@ -704,6 +902,8 @@ export class BridgeClient {
                         },
                     };
                 }
+
+                state.initialized = true;
 
                 if (job?.status === 'COMPLETED') {
                     state.terminal = true;
@@ -722,11 +922,33 @@ export class BridgeClient {
                     const item = await waitForEvent();
                     const data = item.data || {};
 
+                    if (item.event === 'generation:catchup') {
+                        for (const replayed of replayCatchup(data)) {
+                            yield replayed;
+                        }
+                        if (finishCatchup(data) === 'completed') {
+                            return;
+                        }
+                        continue;
+                    }
+
+                    if (item.event === 'generation:reconnect_error') {
+                        continue;
+                    }
+
                     if (item.event === 'generation:token') {
                         if (!data.fullText || data.fullText === state.lastEmittedText) {
                             continue;
                         }
                         state.lastEmittedText = data.fullText;
+                        state.lastSeq = Math.max(state.lastSeq, Number(data.seq) || 0);
+                        yield item;
+                        continue;
+                    }
+
+                    if (item.event === 'generation:reasoning'
+                        || item.event === 'generation:tool_call'
+                        || item.event === 'generation:usage') {
                         yield item;
                         continue;
                     }
@@ -734,6 +956,7 @@ export class BridgeClient {
                     if (item.event === 'generation:completed') {
                         if (data.fullText && data.fullText !== state.lastEmittedText) {
                             state.lastEmittedText = data.fullText;
+                            state.lastSeq = Math.max(state.lastSeq, Number(data.seq) || 0, Number(data.lastSeq) || 0);
                             yield {
                                 event: 'generation:token',
                                 data: {
@@ -776,6 +999,32 @@ export class BridgeClient {
         if (listener) {
             listener.enqueue(event, data);
         }
+    }
+
+    /**
+     * Requests catch-up for generation streams that survived a temporary
+     * WebSocket disconnect.
+     */
+    async recoverGenerationListeners() {
+        if (!this.isReady) {
+            return;
+        }
+
+        const recoveries = [];
+        for (const [jobId, listener] of this.generationListeners.entries()) {
+            if (!listener.isInitialized() || listener.recoveryPromise) {
+                continue;
+            }
+
+            const recovery = this.reconnectGeneration(jobId, listener.getLastSeq(), listener.timeoutMs)
+                .then((catchup) => listener.enqueue('generation:catchup', catchup))
+                .catch((error) => listener.enqueue('generation:reconnect_error', { error: error.message }));
+            listener.recoveryPromise = recovery.finally(() => {
+                listener.recoveryPromise = null;
+            });
+            recoveries.push(listener.recoveryPromise);
+        }
+        await Promise.all(recoveries);
     }
 
     /**

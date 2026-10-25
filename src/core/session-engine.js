@@ -338,7 +338,7 @@ export class UserSession extends EventEmitter {
      * @param {ChatMessage[]} [params.chat]
      * @param {Record<string, unknown>} [params.metadata]
      */
-    syncFullState({ characterId, characterName, chatId, chat, metadata } = {}) {
+    syncFullState({ characterId, characterName, chatId, chat, metadata } = {}, { emitEvents = true } = {}) {
         if (this.destroyed) {
             return { success: false, error: 'Session is destroyed' };
         }
@@ -393,23 +393,46 @@ export class UserSession extends EventEmitter {
         const patch = { op: 'snapshot', snapshot, version: this.stateVersion };
         this.#recordPatch(patch);
 
-        this.#emitEvent('state:updated', {
-            version: this.stateVersion,
-            characterId: this.activeCharacterId,
-            chatId: this.activeChatId,
-            messageCount: this.chat.length,
-        });
+        if (emitEvents) {
+            this.#emitEvent('state:updated', {
+                version: this.stateVersion,
+                characterId: this.activeCharacterId,
+                chatId: this.activeChatId,
+                messageCount: this.chat.length,
+            });
 
-        this.#emitEvent('state:snapshot', {
-            snapshot,
-            version: this.stateVersion,
-        });
+            this.#emitEvent('state:snapshot', {
+                snapshot,
+                version: this.stateVersion,
+            });
 
-        this.#emitEvent('state:patch', {
-            patch,
-            version: this.stateVersion,
-        });
+            this.#emitEvent('state:patch', {
+                patch,
+                version: this.stateVersion,
+            });
+        }
 
+        return { success: true, version: this.stateVersion };
+    }
+
+    /**
+     * Restore a durable snapshot while preserving its version for future
+     * patches. This is intentionally separate from syncFullState so client
+     * supplied state can never choose the authoritative server version.
+     * @param {object} snapshot
+     * @returns {{ success: boolean, version?: number, error?: string }}
+     */
+    restoreSnapshot(snapshot = {}) {
+        const restoredVersion = Number(snapshot.stateVersion ?? snapshot.version);
+        const result = this.syncFullState(snapshot, { emitEvents: false });
+        if (!result.success) {
+            return result;
+        }
+
+        if (Number.isSafeInteger(restoredVersion) && restoredVersion >= 0) {
+            this.stateVersion = restoredVersion;
+            this.patchHistory = [];
+        }
         return { success: true, version: this.stateVersion };
     }
 
@@ -653,6 +676,32 @@ export class UserSession extends EventEmitter {
     }
 
     /**
+     * Updates the server-owned generation lifecycle without exposing an
+     * AbortController to the serialized snapshot or remote clients.
+     * @param {'idle'|'generating'|'intercepting'} generationState
+     * @param {AbortController|null} [activeAbortController=null]
+     */
+    setGenerationState(generationState, activeAbortController = null) {
+        if (this.destroyed) {
+            return { success: false, error: 'Session is destroyed' };
+        }
+        if (!['idle', 'generating', 'intercepting'].includes(generationState)) {
+            return { success: false, error: 'Invalid generation state' };
+        }
+
+        this.touch();
+        this.generationState = generationState;
+        this.activeAbortController = activeAbortController;
+        this.stateVersion++;
+
+        const patch = { op: 'generationState', generationState, version: this.stateVersion };
+        this.#recordPatch(patch);
+        this.#emitEvent('state:patch', { patch, version: this.stateVersion });
+
+        return { success: true, version: this.stateVersion };
+    }
+
+    /**
      * Apply a generic state patch with anti-reentrancy and strict current+1 version check.
      * @param {object} patch
      * @param {string} patch.op
@@ -697,6 +746,8 @@ export class UserSession extends EventEmitter {
                     return this.spliceChat(patch.start, patch.deleteCount, patch.items);
                 case 'setMetadata':
                     return this.updateMetadata(patch.updates);
+                case 'generationState':
+                    return this.setGenerationState(patch.generationState);
                 case 'snapshot':
                     return this.syncFullState(patch.snapshot || patch);
                 default:

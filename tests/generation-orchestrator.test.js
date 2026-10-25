@@ -11,6 +11,9 @@ import {
     createSyntheticRequest,
     extractDelta,
     extractFullTextFromBody,
+    extractFinishReason,
+    extractReasoningDelta,
+    extractToolCallDeltas,
 } from '../src/core/generation/synthetic-response.js';
 import { JobManager } from '../src/core/generation/job-manager.js';
 import sessionEngine, { SessionEngine } from '../src/core/session-engine.js';
@@ -120,6 +123,18 @@ describe('Generation Orchestrator & Server Job Manager Test Suite', () => {
             expect(catchup.chunks.map((c) => c.seq)).toEqual([3, 4, 5]);
         });
 
+        test('Catch-up from seq 0 reports a missing prefix after ring eviction', () => {
+            const job = new GenerationJob({ userId: 'test-user', capacity: 2 });
+            job.appendChunk('1');
+            job.appendChunk('2');
+            job.appendChunk('3');
+
+            const catchup = job.getCatchupChunks(0);
+            expect(catchup.chunks.map((chunk) => chunk.seq)).toEqual([2, 3]);
+            expect(catchup.minSeq).toBe(2);
+            expect(catchup.hasMissedChunks).toBe(true);
+        });
+
         test('toJSON produces sanitized serializable snapshot', () => {
             const job = new GenerationJob({ userId: 'alice', chatId: 'chat_1' });
             job.appendChunk('hi');
@@ -149,6 +164,25 @@ describe('Generation Orchestrator & Server Job Manager Test Suite', () => {
             // Empty / invalid
             expect(extractDelta(null)).toBe('');
             expect(extractDelta({})).toBe('');
+        });
+
+        test('Extracts reasoning, tool-call, and finish metadata without mixing visible text', () => {
+            const chunk = {
+                choices: [{
+                    delta: {
+                        content: 'visible',
+                        reasoning_content: 'private thought',
+                        tool_calls: [{ index: 0, id: 'call_1', function: { name: 'lookup', arguments: '{' } }],
+                    },
+                    finish_reason: 'tool_calls',
+                }],
+                usage: { prompt_tokens: 11, completion_tokens: 4 },
+            };
+
+            expect(extractReasoningDelta(chunk)).toBe('private thought');
+            expect(extractToolCallDeltas(chunk)).toHaveLength(1);
+            expect(extractFinishReason(chunk)).toBe('tool_calls');
+            expect(extractDelta(chunk)).toBe('visible');
         });
 
         test('Extracts full text from non-streaming response body', () => {
@@ -195,6 +229,25 @@ describe('Generation Orchestrator & Server Job Manager Test Suite', () => {
             expect(job.fullText).toBe('Hello world!');
             expect(job.status).toBe(JOB_STATUS.COMPLETED);
             expect(job.lastSeq).toBe(3);
+        });
+
+        test('Captures reasoning, tool calls, usage, and finish reason from SSE', async () => {
+            const job = new GenerationJob({ userId: 'test-user' });
+            job.transition(JOB_STATUS.PREPARING);
+            job.transition(JOB_STATUS.STREAMING);
+
+            const res = new SyntheticResponse(job);
+            res.write('data: {"choices":[{"delta":{"reasoning_content":"think "}}]}\n\n');
+            res.write('data: {"choices":[{"delta":{"content":"answer","tool_calls":[{"index":0,"function":{"name":"lookup"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":8,"completion_tokens":2}}\n\n');
+            res.end();
+
+            await new Promise((resolve) => res.on('finish', resolve));
+
+            expect(job.fullText).toBe('answer');
+            expect(job.reasoningText).toBe('think ');
+            expect(job.toolCallDeltas).toHaveLength(1);
+            expect(job.tokenStats).toEqual({ promptTokens: 8, completionTokens: 2 });
+            expect(job.finishReason).toBe('tool_calls');
         });
 
         test('Handles split/fragmented SSE lines across TCP chunks', async () => {
@@ -404,6 +457,139 @@ describe('Generation Orchestrator & Server Job Manager Test Suite', () => {
             expect(session.activeAbortController).toBeNull();
         });
 
+        test('PREPARING assembles an explicit server-owned prompt context before gateway dispatch', async () => {
+            const gatewayBodies = [];
+            const gateway = async (req, res) => {
+                gatewayBodies.push(req.body);
+                res.send({ choices: [{ message: { content: 'Server assembled response' } }] });
+            };
+
+            jobManager = new JobManager({
+                generateHandler: gateway,
+                sessionEngine: mockSessionEngine,
+                wsBridge: mockWsBridge,
+            });
+
+            const job = await jobManager.createJob({
+                userId: 'alice',
+                body: {
+                    model: 'test-model',
+                    messages: [{ role: 'user', content: 'client fallback prompt' }],
+                    core_prompt_context: {
+                        settings: {
+                            source: 'openai',
+                            model: 'test-model',
+                            maxContext: 1000,
+                            maxTokens: 100,
+                            newChatPrompt: '[Chat begins]',
+                        },
+                        generationControl: { type: 'normal', dryRun: false },
+                        characterContext: {
+                            name1: 'Alice',
+                            name2: 'Seraphina',
+                            charDescription: 'A server-owned character description.',
+                        },
+                        worldInfo: { worldInfoBefore: '', worldInfoAfter: '' },
+                        prompts: [],
+                        extensionPrompts: {},
+                        chatHistory: [{ role: 'user', content: 'Hello from server context.' }],
+                        messageExamples: [],
+                        toolsContext: { canPerformToolCalls: false },
+                        recordedTokenCounts: {
+                            main: 1,
+                            charDescription: 5,
+                            newMainChat: 1,
+                            'chatHistory-1': 2,
+                        },
+                    },
+                },
+            });
+
+            await new Promise((resolve) => job.on('completed', resolve));
+
+            expect(gatewayBodies).toHaveLength(1);
+            expect(gatewayBodies[0].core_prompt_context).toBeUndefined();
+            expect(gatewayBodies[0].messages[0]).toEqual({ role: 'system', content: 'You are Seraphina.' });
+            expect(gatewayBodies[0].messages).toEqual(expect.arrayContaining([
+                expect.objectContaining({ content: 'A server-owned character description.' }),
+                expect.objectContaining({ content: 'Hello from server context.' }),
+            ]));
+        });
+
+        test('Request ids make duplicate generate:start delivery idempotent', async () => {
+            const gateway = (_req, _res) => new Promise(() => { });
+            jobManager = new JobManager({
+                generateHandler: gateway,
+                sessionEngine: mockSessionEngine,
+                wsBridge: mockWsBridge,
+            });
+
+            const first = await jobManager.createJob({
+                userId: 'alice',
+                body: {
+                    core_request_id: 'request-idempotency-1',
+                    core_prompt_mode: 'client_final',
+                    messages: [{ role: 'user', content: 'hello' }],
+                },
+            });
+            const duplicate = await jobManager.createJob({
+                userId: 'alice',
+                body: {
+                    core_request_id: 'request-idempotency-1',
+                    core_prompt_mode: 'client_final',
+                    messages: [{ role: 'user', content: 'hello' }],
+                },
+            });
+
+            expect(duplicate.id).toBe(first.id);
+            expect(jobManager.jobs.size).toBe(1);
+        });
+
+        test('Rejects contradictory prompt ownership modes before creating a job', async () => {
+            jobManager = new JobManager({
+                generateHandler: async () => {},
+                sessionEngine: mockSessionEngine,
+                wsBridge: mockWsBridge,
+            });
+
+            await expect(jobManager.createJob({
+                userId: 'alice',
+                body: {
+                    core_prompt_mode: 'client_final',
+                    core_prompt_context: {},
+                    messages: [{ role: 'user', content: 'hello' }],
+                },
+            })).rejects.toMatchObject({
+                name: 'InvalidGenerationRequestError',
+                status: 400,
+            });
+        });
+
+        test('Does not settle a completed job into a different active chat', async () => {
+            const gateway = async (_req, res) => {
+                res.send({ choices: [{ message: { content: 'chat A response' } }] });
+            };
+            jobManager = new JobManager({
+                generateHandler: gateway,
+                sessionEngine: mockSessionEngine,
+                wsBridge: mockWsBridge,
+            });
+
+            const session = mockSessionEngine.getSession('alice');
+            session.activeChatId = 'chat-B';
+            const job = await jobManager.createJob({
+                userId: 'alice',
+                body: { chatId: 'chat-A', characterName: 'Seraphina' },
+                deferStart: true,
+            });
+            const completed = new Promise((resolve) => job.once('completed', resolve));
+            jobManager.startJob(job);
+            await completed;
+
+            expect(session.chat).toHaveLength(0);
+            expect(session.generationState).toBe('idle');
+        });
+
         test('Core generation marker reconciles an existing client placeholder without duplication', async () => {
             const session = mockSessionEngine.getSession('alice');
             const marker = 'core-client-generation-1';
@@ -479,6 +665,32 @@ describe('Generation Orchestrator & Server Job Manager Test Suite', () => {
             expect(session.chat.length).toBe(1);
             expect(session.chat[0].mes).toBe('Partial generated text...');
             expect(session.generationState).toBe('idle');
+        });
+
+        test('Failed jobs roll back partial output instead of appending an assistant message', async () => {
+            const failingGateway = async (_req, res) => {
+                res.write('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n');
+                throw new Error('upstream failed after partial output');
+            };
+
+            jobManager = new JobManager({
+                generateHandler: failingGateway,
+                sessionEngine: mockSessionEngine,
+                wsBridge: mockWsBridge,
+            });
+
+            const job = await jobManager.createJob({
+                userId: 'alice',
+                body: { core_generation_job_id: 'failed-generation-1' },
+            });
+            const session = mockSessionEngine.getSession('alice');
+            await new Promise((resolve) => job.on('failed', resolve));
+
+            expect(job.status).toBe(JOB_STATUS.FAILED);
+            expect(job.fullText).toBe('partial');
+            expect(session.chat).toHaveLength(0);
+            expect(session.generationState).toBe('idle');
+            expect(session.activeAbortController).toBeNull();
         });
     });
 
@@ -797,6 +1009,8 @@ describe('Generation Orchestrator & Server Job Manager Test Suite', () => {
         let originalGetItem;
         let originalTransportEnabled;
         let originalOrchestratorEnabled;
+        let originalJobWsBridge;
+        let originalGenerateHandler;
 
         const waitForOpen = (ws) => new Promise((resolve, reject) => {
             const timeout = setTimeout(() => reject(new Error('Timed out waiting for WebSocket open')), 3000);
@@ -843,7 +1057,26 @@ describe('Generation Orchestrator & Server Job Manager Test Suite', () => {
                 ['st-core.v1', `ticket.${ticket}`],
                 { headers: { Origin: `http://127.0.0.1:${port}` } },
             );
+            const handshake = new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => reject(new Error('Timed out waiting for handshake')), 3000);
+                const onMessage = (data) => {
+                    let message;
+                    try {
+                        message = JSON.parse(data.toString());
+                    } catch {
+                        return;
+                    }
+                    if (message.type !== 'handshake') {
+                        return;
+                    }
+                    clearTimeout(timeout);
+                    ws.off('message', onMessage);
+                    resolve(message);
+                };
+                ws.on('message', onMessage);
+            });
             await waitForOpen(ws);
+            ws.handshake = await handshake;
             return ws;
         };
 
@@ -862,6 +1095,10 @@ describe('Generation Orchestrator & Server Job Manager Test Suite', () => {
             };
 
             bridge = new WebSocketBridge();
+            const { jobManager } = await import('../src/core/generation/job-manager.js');
+            originalJobWsBridge = jobManager.wsBridge;
+            originalGenerateHandler = jobManager.generateHandler;
+            jobManager.wsBridge = bridge;
             server = http.createServer();
             bridge.attachServer(server);
             await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -885,6 +1122,9 @@ describe('Generation Orchestrator & Server Job Manager Test Suite', () => {
             }
 
             storage.getItem = originalGetItem;
+            const { jobManager } = await import('../src/core/generation/job-manager.js');
+            jobManager.wsBridge = originalJobWsBridge;
+            jobManager.generateHandler = originalGenerateHandler;
             if (originalTransportEnabled === undefined) {
                 delete process.env.SILLYTAVERN_CORE_TRANSPORT_ENABLED;
             } else {
@@ -895,6 +1135,114 @@ describe('Generation Orchestrator & Server Job Manager Test Suite', () => {
             } else {
                 process.env.SILLYTAVERN_CORE_GENERATION_ORCHESTRATORENABLED = originalOrchestratorEnabled;
             }
+        });
+
+        test('publishes job creation before fast generation events and broadcasts terminal state', async () => {
+            const { jobManager } = await import('../src/core/generation/job-manager.js');
+            const previousHandler = jobManager.generateHandler;
+            jobManager.generateHandler = async (_req, res) => {
+                res.write('data: {"choices":[{"delta":{"content":"fast"}}]}\n\n');
+                res.end();
+            };
+
+            const createdPromise = waitForMessage(
+                aliceWs,
+                (message) => message.type === 'job:created' && message.requestId === 'fast-generation-request',
+            );
+            const tokenPromise = waitForMessage(
+                aliceWs,
+                (message) => message.type === 'event' && message.event === 'generation:token',
+            );
+            const completedPromise = waitForMessage(
+                aliceWs,
+                (message) => message.type === 'event' && message.event === 'generation:completed',
+            );
+
+            aliceWs.send(JSON.stringify({
+                type: 'generate:start',
+                id: 'fast-generation-request',
+                payload: {
+                    messages: [{ role: 'user', content: 'hello' }],
+                    stream: true,
+                    chat_completion_source: 'openai',
+                    model: 'test-model',
+                },
+            }));
+
+            const created = await createdPromise;
+            expect(created.jobId).toEqual(expect.any(String));
+
+            const tokenEvent = await tokenPromise;
+            expect(tokenEvent.data.jobId).toBe(created.jobId);
+            expect(tokenEvent.data.seq).toBe(1);
+            expect(tokenEvent.data.fullText).toBe('fast');
+
+            const completedEvent = await completedPromise;
+            expect(completedEvent.data.jobId).toBe(created.jobId);
+            expect(completedEvent.data.fullText).toBe('fast');
+
+            jobManager.generateHandler = previousHandler;
+        });
+
+        test('broadcasts reasoning, tool-call, and usage metadata from the provider stream', async () => {
+            const { jobManager } = await import('../src/core/generation/job-manager.js');
+            const previousHandler = jobManager.generateHandler;
+            jobManager.generateHandler = async (_req, res) => {
+                res.write('data: {"choices":[{"delta":{"reasoning_content":"think"}}]}\n\n');
+                res.write('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"lookup"}}]}}]}\n\n');
+                res.write('data: {"choices":[{"delta":{"content":"answer"},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":2}}\n\n');
+                res.end();
+            };
+
+            const createdPromise = waitForMessage(
+                aliceWs,
+                (message) => message.type === 'job:created' && message.requestId === 'metadata-generation-request',
+            );
+            const reasoningPromise = waitForMessage(
+                aliceWs,
+                (message) => message.type === 'event' && message.event === 'generation:reasoning',
+            );
+            const toolCallPromise = waitForMessage(
+                aliceWs,
+                (message) => message.type === 'event' && message.event === 'generation:tool_call',
+            );
+            const usagePromise = waitForMessage(
+                aliceWs,
+                (message) => message.type === 'event' && message.event === 'generation:usage',
+            );
+            const completedPromise = waitForMessage(
+                aliceWs,
+                (message) => message.type === 'event' && message.event === 'generation:completed',
+            );
+
+            aliceWs.send(JSON.stringify({
+                type: 'generate:start',
+                id: 'metadata-generation-request',
+                payload: {
+                    messages: [{ role: 'user', content: 'hello' }],
+                    stream: true,
+                    chat_completion_source: 'openai',
+                    model: 'test-model',
+                },
+            }));
+
+            const created = await createdPromise;
+            const reasoning = await reasoningPromise;
+            const toolCall = await toolCallPromise;
+            const usage = await usagePromise;
+            const completed = await completedPromise;
+
+            expect(reasoning.data.jobId).toBe(created.jobId);
+            expect(reasoning.data.delta).toBe('think');
+            expect(toolCall.data.jobId).toBe(created.jobId);
+            expect(toolCall.data.delta.function.name).toBe('lookup');
+            expect(usage.data.jobId).toBe(created.jobId);
+            expect(usage.data.tokenStats).toEqual({ promptTokens: 7, completionTokens: 2 });
+            expect(completed.data.finishReason).toBe('stop');
+            expect(completed.data.reasoningText).toBe('think');
+            expect(completed.data.toolCallDeltas).toHaveLength(1);
+
+            jobManager.generateHandler = previousHandler;
         });
 
         test('rejects cross-user WebSocket job abort and reconnect attempts', async () => {
@@ -960,6 +1308,15 @@ describe('Generation Orchestrator & Server Job Manager Test Suite', () => {
             process.env.SILLYTAVERN_CORE_GENERATION_ORCHESTRATORENABLED = 'true';
         });
 
+        test('advertises authenticated Core capabilities in the handshake', () => {
+            expect(aliceWs.handshake.status).toBe('authenticated');
+            expect(aliceWs.handshake.capabilities).toMatchObject({
+                orchestrator: true,
+                serverPromptAssembly: true,
+                promptInterception: false,
+            });
+        });
+
         test('does not accept a plugin interception acknowledgement from another user', async () => {
             const interception = bridge.requestInterception('alice', 'test-interception', { prompt: 'secret' }, 1000);
             const request = await waitForMessage(aliceWs, (message) => message.type === 'intercept_req');
@@ -983,6 +1340,86 @@ describe('Generation Orchestrator & Server Job Manager Test Suite', () => {
             }));
 
             await expect(interception).resolves.toEqual({ prompt: 'approved by alice' });
+        });
+
+        test('binds plugin interception acknowledgements to the target connection and request', async () => {
+            const interception = bridge.requestInterception(
+                'alice',
+                'chat_completion_prompt_ready',
+                { chat: [{ role: 'user', content: 'targeted' }], dryRun: false },
+                1000,
+                {
+                    targetWs: [...bridge.userClients.get('alice')][0],
+                    jobId: 'job-targeted',
+                    coreRequestId: 'request-targeted',
+                },
+            );
+            const request = await waitForMessage(aliceWs, (message) => message.type === 'intercept_req');
+
+            expect(request.jobId).toBe('job-targeted');
+            expect(request.coreRequestId).toBe('request-targeted');
+
+            bobWs.send(JSON.stringify({
+                type: 'intercept_ack',
+                interceptId: request.interceptId,
+                jobId: request.jobId,
+                coreRequestId: request.coreRequestId,
+                payload: { chat: [{ role: 'user', content: 'wrong connection' }] },
+            }));
+
+            await expect(Promise.race([
+                interception.then(() => 'resolved'),
+                new Promise((resolve) => setTimeout(() => resolve('pending'), 50)),
+            ])).resolves.toBe('pending');
+
+            aliceWs.send(JSON.stringify({
+                type: 'intercept_ack',
+                interceptId: request.interceptId,
+                jobId: request.jobId,
+                coreRequestId: request.coreRequestId,
+                payload: {
+                    chat: [{ role: 'user', content: 'approved connection' }],
+                    dryRun: false,
+                },
+            }));
+
+            await expect(interception).resolves.toEqual({
+                chat: [{ role: 'user', content: 'approved connection' }],
+                dryRun: false,
+            });
+        });
+
+        test('uses the mutable CHAT_COMPLETION_PROMPT_READY payload for plugin interception', async () => {
+            const interception = bridge.requestInterception(
+                'alice',
+                'chat_completion_prompt_ready',
+                { chat: [{ role: 'user', content: 'original' }], dryRun: false },
+                1000,
+            );
+            const request = await waitForMessage(aliceWs, (message) => message.type === 'intercept_req');
+
+            expect(request.event).toBe('chat_completion_prompt_ready');
+            expect(request.payload.chat[0].content).toBe('original');
+
+            request.payload.chat[0].content = 'modified by plugin';
+            aliceWs.send(JSON.stringify({
+                type: 'intercept_ack',
+                interceptId: request.interceptId,
+                payload: request.payload,
+            }));
+
+            await expect(interception).resolves.toEqual({
+                chat: [{ role: 'user', content: 'modified by plugin' }],
+                dryRun: false,
+            });
+        });
+
+        test('falls back to the original prompt when plugin interception times out', async () => {
+            const originalPayload = { chat: [{ role: 'user', content: 'original' }], dryRun: false };
+            const interception = bridge.requestInterception('alice', 'chat_completion_prompt_ready', originalPayload, 20);
+            await waitForMessage(aliceWs, (message) => message.type === 'intercept_req');
+
+            await expect(interception).resolves.toBe(originalPayload);
         });
 
         test('serves and broadcasts the authenticated user state snapshot', async () => {

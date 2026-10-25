@@ -424,3 +424,6 @@ core:
     jobRetentionSeconds: 300
     # Enable plugin prompt interception over WebSocket (default: false)
     pluginInterceptionEnabled: false
+    # Assemble explicit core_prompt_context payloads on the server before
+    # plugin interception and gateway dispatch (default: true)
+    serverPromptAssemblyEnabled: true

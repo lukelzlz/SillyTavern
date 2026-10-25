@@ -49,6 +49,14 @@ export function setConfigFilePath(configFilePath) {
 }
 
 /**
+ * Returns the currently selected config path without forcing config loading.
+ * @returns {string|null}
+ */
+export function getConfigFilePath() {
+    return CONFIG_PATH;
+}
+
+/**
  * Returns the config object from the config.yaml file.
  * @returns {object} Config object
  */

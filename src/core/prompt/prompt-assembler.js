@@ -22,7 +22,9 @@ async function getPromptConverters() {
                 try {
                     const currentDir = path.dirname(fileURLToPath(import.meta.url));
                     const defaultConfigPath = path.resolve(currentDir, '../../../default/config.yaml');
-                    util.setConfigFilePath(defaultConfigPath);
+                    if (!util.getConfigFilePath()) {
+                        util.setConfigFilePath(defaultConfigPath);
+                    }
                 } catch {
                     // Ignore if already set
                 }

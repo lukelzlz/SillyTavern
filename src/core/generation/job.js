@@ -113,6 +113,13 @@ export class GenerationJob extends EventEmitter {
             completionTokens: 0,
         };
 
+        /** @type {string} Provider reasoning/thinking text captured separately from visible content */
+        this.reasoningText = '';
+        /** @type {Array<object>} Provider tool-call deltas in arrival order */
+        this.toolCallDeltas = [];
+        /** @type {string|null} Provider finish reason */
+        this.finishReason = null;
+
         /** @type {number} Monotonically increasing sequence number */
         this.lastSeq = 0;
 
@@ -196,6 +203,58 @@ export class GenerationJob extends EventEmitter {
     }
 
     /**
+     * Captures a provider reasoning/thinking delta without mixing it into the
+     * visible assistant text stream.
+     * @param {string} delta
+     * @returns {string}
+     */
+    appendReasoning(delta) {
+        if (this.isTerminal() || typeof delta !== 'string' || delta.length === 0) {
+            return this.reasoningText;
+        }
+        this.reasoningText += delta;
+        this.updatedAt = Date.now();
+        this.emit('reasoning', { jobId: this.id, delta, fullText: this.reasoningText });
+        return this.reasoningText;
+    }
+
+    /**
+     * Captures one tool-call delta while preserving the provider's original
+     * shape for downstream plugins and UI consumers.
+     * @param {object} delta
+     * @returns {object|null}
+     */
+    appendToolCall(delta) {
+        if (this.isTerminal() || !delta || typeof delta !== 'object' || Array.isArray(delta)) {
+            return null;
+        }
+        const safeDelta = structuredClone(delta);
+        this.toolCallDeltas.push(safeDelta);
+        this.updatedAt = Date.now();
+        this.emit('toolCall', { jobId: this.id, delta: safeDelta, index: this.toolCallDeltas.length - 1 });
+        return safeDelta;
+    }
+
+    /**
+     * Records provider usage with both OpenAI snake_case and normalized names.
+     * @param {object} usage
+     */
+    recordUsage(usage) {
+        if (!usage || typeof usage !== 'object') {
+            return;
+        }
+        const promptTokens = usage.prompt_tokens ?? usage.promptTokens;
+        const completionTokens = usage.completion_tokens ?? usage.completionTokens;
+        if (Number.isFinite(Number(promptTokens))) {
+            this.tokenStats.promptTokens = Number(promptTokens);
+        }
+        if (Number.isFinite(Number(completionTokens))) {
+            this.tokenStats.completionTokens = Number(completionTokens);
+        }
+        this.emit('usage', { jobId: this.id, tokenStats: { ...this.tokenStats } });
+    }
+
+    /**
      * Retrieves missed chunks for catch-up stream replay.
      * @param {number|string} [lastSeq=0]
      * @returns {{ chunks: Array<{ seq: number, delta: string, timestamp: number }>, fromSeq: number, toSeq: number, minSeq: number, maxSeq: number, hasMissedChunks: boolean }}
@@ -212,7 +271,11 @@ export class GenerationJob extends EventEmitter {
             toSeq: maxSeq,
             minSeq,
             maxSeq,
-            hasMissedChunks: parsedLastSeq > 0 && minSeq > 0 && parsedLastSeq < minSeq - 1,
+            // A client starting from seq 0 also misses the prefix when the
+            // ring buffer has already evicted one or more chunks. In that
+            // case replaying the retained suffix as if it were a complete
+            // response would produce visibly truncated text.
+            hasMissedChunks: minSeq > 0 && parsedLastSeq < minSeq - 1,
         };
     }
 
@@ -227,10 +290,7 @@ export class GenerationJob extends EventEmitter {
         }
 
         if (tokenStats && typeof tokenStats === 'object') {
-            this.tokenStats = {
-                promptTokens: Number(tokenStats.promptTokens) || this.tokenStats.promptTokens,
-                completionTokens: Number(tokenStats.completionTokens) || this.tokenStats.completionTokens,
-            };
+            this.recordUsage(tokenStats);
         }
 
         this.completedAt = Date.now();
@@ -240,6 +300,9 @@ export class GenerationJob extends EventEmitter {
             jobId: this.id,
             fullText: this.fullText,
             tokenStats: this.tokenStats,
+            reasoningText: this.reasoningText,
+            toolCallDeltas: this.toolCallDeltas,
+            finishReason: this.finishReason,
         });
 
         return this;
@@ -309,6 +372,10 @@ export class GenerationJob extends EventEmitter {
             chatId: this.chatId,
             characterId: this.characterId,
             characterName: this.characterName,
+            coreRequestId: typeof this.requestBody?.core_request_id === 'string'
+                ? this.requestBody.core_request_id
+                : null,
+            promptMode: this.requestBody?.core_prompt_mode || null,
             status: this.status,
             createdAt: this.createdAt,
             updatedAt: this.updatedAt,
@@ -317,6 +384,9 @@ export class GenerationJob extends EventEmitter {
             fullText: this.fullText,
             fullTextLength: this.fullText.length,
             tokenStats: this.tokenStats,
+            reasoningText: this.reasoningText,
+            toolCallDeltas: this.toolCallDeltas,
+            finishReason: this.finishReason,
             error: this.error,
             abortReason: this.abortReason,
         };
