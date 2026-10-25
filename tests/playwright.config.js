@@ -9,6 +9,7 @@ export default defineConfig({
         video: 'only-on-failure',
         screenshot: 'only-on-failure',
     },
+    testIgnore: '**/*.real.e2e.js',
     workers: 4,
     fullyParallel: true,
 });

@@ -34,6 +34,10 @@ status: tested
 18. 新增 authenticated WebSocket 断线追帧集成回归：生成首帧后关闭原连接，服务端继续生成并完成，新连接使用 `lastSeq` 追回缺失 chunk；新增浏览器 E2E 覆盖初始 reconnect race 的完整文本去重与终态收敛。
 19. `BridgeClient` 现在将服务端 `generationState` patch/snapshot 投影到绑定的浏览器状态，并通过可选回调驱动远端标签页的生成中/空闲 UI；`st-context` 已接入该回调，避免后台生成完成后其他标签页仍保持锁定状态。
 20. 新增浏览器 E2E 回归，验证 authenticated Core 状态投影从 `generating` 收敛到 `idle`，且不改变既有 prompt handoff 与 generation reconnect 路径。
+21. `BridgeClient` 现在跟踪 `generation:started/token/completed/aborted/failed` 对应的 active job，并为无本地 `StreamingProcessor` 的远端标签页提供幂等 `stopActiveGeneration()`；`stopGeneration()` 在远端标签页会转发 `generate:abort`，不再只中止一个本地空闲 AbortController。
+22. 新增独立的真实 Core 浏览器 E2E 配置与 mock provider：浏览器通过 authenticated Core WS 发起 server-owned 请求，服务端执行 PromptAssembler 与 plugin interception，provider 返回可验证的 World Info/插件 marker 计数。
+23. 真实浏览器 E2E 的“断线/中断”场景不关闭系统网络、不切换离线状态；mock provider 通过 `/control/block` 阻断上游响应，测试再由远端 Stop 触发服务端 abort，最后通过 `/control/release` 释放响应闸门，验证 job abort 与浏览器 stream 收敛。
+24. 修复真实 handoff 暴露的两个 contract 问题：浏览器 `names_behavior` 数字枚举序列化为 server schema 要求的字符串；当服务端已经扫描 canonical World Info 时，PromptAssembler 不再让 browser prompt collection 中的 stale `worldInfoBefore/worldInfoAfter` 覆盖服务端槽位。
 
 ## 验证记录
 
@@ -58,9 +62,11 @@ status: tested
 - 本轮 generation reconnect/catch-up 增量：目标 ESLint 无 error；`cd tests && npm run test:unit -- generation-orchestrator.test.js --runInBand` 通过，54 tests；启动本地服务后 `npx playwright test frontend/CorePromptHandoff.e2e.js --config=playwright.config.js` 通过，2 tests。
 - 本轮完整检查：`npm run lint` 通过；`cd tests && npm run test:unit` 通过，28 suites / 598 tests。
 - 本轮 generation state projection 增量：`npm run lint` 通过；`cd tests && npm run test:unit -- core-bridge.test.js generation-orchestrator.test.js --runInBand` 通过，2 suites / 65 tests；启动本地服务后 `npm --prefix tests run test:e2e -- frontend/CorePromptHandoff.e2e.js --config=playwright.config.js --workers=1` 通过，3 tests；随后 `cd tests && npm run test:unit` 完整回归通过，28 suites / 598 tests。
+- 本轮真实 Core handoff 与远端停止增量：`npm run lint` 通过；`cd tests && npm run test:unit -- prompt-parity.test.js core-bridge.test.js generation-orchestrator.test.js --runInBand` 通过，3 suites / 99 tests；使用独立 Chromium（Playwright `channel: chromium`，未复用用户浏览器）、mock provider response gate 与 Core-enabled server 配置运行 `npm --prefix tests run test:e2e -- --config=playwright.core-handoff.config.js --workers=1`，2 tests 通过；默认配置下 `npm --prefix tests run test:e2e -- frontend/CorePromptHandoff.e2e.js --config=playwright.config.js --workers=1`，5 tests 通过。
 
 ## 未完成与下一阶段
 
 - 本阶段的 browser/server 完整 World Info slot differential fixture、真实 Core WS `server_context` interception 无重复注入验证，以及浏览器 `prepareOpenAIMessages()` ownership/fallback 路径均已完成。
-- 本轮已补齐多标签生成状态投影的第一步：服务端 `generationState` 的状态 patch/snapshot 可驱动远端浏览器 UI 从生成中恢复为空闲；仍未完成远端标签页直接发起停止操作，以及 capability 开启时浏览器实际 `sendStreamingRequest()` 到服务端 gateway/plugin interception 的完整真实链路验收。
-- 下一阶段继续沿 Core prompt handoff 主线补齐真实浏览器 authenticated Core WS 生成链路，重点推进 capability 开启时浏览器实际发起 `sendStreamingRequest()` 的端到端服务端生成/插件拦截；随后再处理远端标签页停止操作与生成中断后的完整 UI 状态恢复验收。
+- 上一轮已补齐多标签生成状态投影的第一步；本轮在此基础上完成了远端标签页 Stop 与 capability 开启时的真实 Core WS server-context streaming 验收。
+- 本轮已完成 capability 开启时浏览器真实 Core WS server-context streaming、服务端 World Info/插件 interception、response-gated 远端停止与 UI stream 收敛；仍未完成完整的双浏览器页面共享 active job 刷新接管，以及 provider 失败后的真实浏览器跨标签页错误 UI 验收。
+- 下一阶段继续沿 Core prompt handoff 主线补齐真实 `Generate()` / `sendStreamingRequest()` UI 入口接管、双标签页刷新后的 active job 恢复，以及 provider failure 后的跨标签页状态恢复；断线类测试继续采用 provider/gateway 响应闸门或定向 WebSocket 连接注入，不使用系统断网。

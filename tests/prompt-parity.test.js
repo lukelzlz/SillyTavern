@@ -161,6 +161,52 @@ describe('Prompt Parity Phase 1: 8 Golden Fixture Differential Tests', () => {
         ]));
     });
 
+    test('Server-owned World Info replaces stale browser slot prompts', async () => {
+        const output = await PromptAssembler.assemble({
+            settings: {
+                source: 'openai',
+                maxContext: 1000,
+                maxTokens: 100,
+                newChatPrompt: '[Chat begins]',
+            },
+            generationControl: { type: 'normal', dryRun: false },
+            characterContext: { name2: 'Seraphina' },
+            worldInfo: {
+                worldInfoBefore: 'stale browser value',
+                worldInfoAfter: 'stale browser after',
+                entries: [{
+                    uid: 'canonical-slot',
+                    constant: true,
+                    position: 0,
+                    content: 'Canonical World Info slot.',
+                }],
+                options: { budget: 0 },
+            },
+            promptOrder: ['worldInfoBefore', 'main', 'worldInfoAfter', 'chatHistory'],
+            prompts: [
+                { identifier: 'worldInfoBefore', role: 'system', content: 'stale browser value' },
+                { identifier: 'worldInfoAfter', role: 'system', content: 'stale browser after' },
+            ],
+            extensionPrompts: {},
+            chatHistory: [{ role: 'user', content: 'The signal is active.' }],
+            messageExamples: [],
+            toolsContext: { canPerformToolCalls: false },
+            recordedTokenCounts: {},
+        }, {
+            tokenizer: new DualTrackTokenizer({
+                tokenizer: createPromptTokenizer({ source: 'openai', model: 'gpt-4o' }),
+            }),
+        });
+
+        expect(output.chat).toEqual(expect.arrayContaining([
+            { role: 'system', content: 'Canonical World Info slot.' },
+        ]));
+        expect(output.chat).not.toEqual(expect.arrayContaining([
+            { role: 'system', content: 'stale browser value' },
+            { role: 'system', content: 'stale browser after' },
+        ]));
+    });
+
     test('Browser-shaped contexts can place an active custom prompt in the declared order', async () => {
         const fixture = loadFixture('GF-PROMPT-01-standard-chat.json');
         const input = structuredClone(fixture.input);

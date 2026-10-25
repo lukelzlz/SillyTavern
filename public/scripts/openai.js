@@ -1546,6 +1546,19 @@ async function preparePromptsForChatCompletion({ scenario, charPersonality, name
  * @param {boolean} [options.dryRun]
  * @returns {object}
  */
+function serializeNamesBehavior(value) {
+    if (typeof value === 'string') {
+        return value;
+    }
+
+    return {
+        [character_names_behavior.NONE]: 'none',
+        [character_names_behavior.DEFAULT]: 'default',
+        [character_names_behavior.COMPLETION]: 'completion',
+        [character_names_behavior.CONTENT]: 'content',
+    }[value] || 'default';
+}
+
 export function buildCorePromptContext({
     prompts,
     messages = [],
@@ -1601,7 +1614,7 @@ export function buildCorePromptContext({
             maxTokens: Number(promptManager?.serviceSettings?.openai_max_tokens || oai_settings.openai_max_tokens),
             squashSystemMessages: Boolean(oai_settings.squash_system_messages),
             pinExamples: Boolean(power_user.pin_examples),
-            namesBehavior: oai_settings.names_behavior,
+            namesBehavior: serializeNamesBehavior(oai_settings.names_behavior),
             newChatPrompt: oai_settings.new_chat_prompt,
             newGroupChatPrompt: oai_settings.new_group_chat_prompt,
             newExampleChatPrompt: oai_settings.new_example_chat_prompt,

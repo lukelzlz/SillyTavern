@@ -5667,6 +5667,15 @@ export function stopGeneration() {
     if (streamingProcessor) {
         streamingProcessor.onStopStreaming();
         stopped = true;
+    } else if (globalThis.window?.coreBridge?.activeGenerationJob?.jobId
+        && typeof globalThis.window.coreBridge.stopActiveGeneration === 'function') {
+        globalThis.window.coreBridge.stopActiveGeneration('Clicked stop button').catch((error) => {
+            console.warn('[Core Bridge] Failed to stop remote generation:', error);
+        });
+        hideStopButton();
+        stopped = true;
+        eventSource.emit(event_types.GENERATION_STOPPED);
+        return stopped;
     }
     if (abortController) {
         abortController.abort('Clicked stop button');

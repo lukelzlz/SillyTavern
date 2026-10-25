@@ -38,6 +38,8 @@ export class BridgeClient {
         this.generationListeners = new Map();
         /** @type {object|null} Current server-reported active generation job. */
         this.activeGenerationJob = null;
+        /** @type {Promise<any>|null} In-flight remote abort request. */
+        this.activeGenerationAbortPromise = null;
 
         /** @type {number} Number of server-originated events currently being projected. */
         this.remoteEventDepth = 0;
@@ -1084,10 +1086,60 @@ export class BridgeClient {
 
     dispatchGenerationEvent(event, data) {
         const jobId = data?.jobId;
+        if (jobId) {
+            if (event === 'generation:started') {
+                this.activeGenerationJob = {
+                    ...(this.activeGenerationJob?.jobId === jobId ? this.activeGenerationJob : {}),
+                    jobId,
+                    status: data.status || 'PREPARING',
+                };
+            } else if (this.activeGenerationJob?.jobId === jobId) {
+                this.activeGenerationJob = {
+                    ...this.activeGenerationJob,
+                    ...(data || {}),
+                    status: event === 'generation:token'
+                        ? 'STREAMING'
+                        : event === 'generation:completed'
+                            ? 'COMPLETED'
+                            : event === 'generation:aborted'
+                                ? 'ABORTED'
+                                : event === 'generation:failed'
+                                    ? 'FAILED'
+                                    : this.activeGenerationJob.status,
+                };
+                if (['generation:completed', 'generation:aborted', 'generation:failed'].includes(event)) {
+                    this.activeGenerationJob = null;
+                }
+            }
+        }
         const listener = jobId ? this.generationListeners.get(jobId) : null;
         if (listener) {
             listener.enqueue(event, data);
         }
+    }
+
+    /**
+     * Aborts the currently active server-side generation for this browser
+     * session. This is used by a second tab that has the server-owned
+     * generation UI but no local StreamingProcessor.
+     * @param {string} [reason='User aborted']
+     * @param {number} [timeoutMs=5000]
+     * @returns {Promise<any>}
+     */
+    stopActiveGeneration(reason = 'User aborted', timeoutMs = 5000) {
+        const jobId = this.activeGenerationJob?.jobId || this.activeGenerationJob?.id;
+        if (!jobId) {
+            return Promise.resolve(null);
+        }
+        if (this.activeGenerationAbortPromise) {
+            return this.activeGenerationAbortPromise;
+        }
+
+        this.activeGenerationAbortPromise = this.abortGeneration(jobId, reason, timeoutMs)
+            .finally(() => {
+                this.activeGenerationAbortPromise = null;
+            });
+        return this.activeGenerationAbortPromise;
     }
 
     /**

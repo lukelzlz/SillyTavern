@@ -273,4 +273,78 @@ test.describe('Core prompt handoff ownership', () => {
         expect(result.states).toEqual(['generating', 'idle']);
         expect(result.generationState).toBe('idle');
     });
+
+    test('allows a remote tab to stop the active server generation without a local stream', async ({ page }) => {
+        const result = await page.evaluate(async () => {
+            const script = await import('/script.js');
+            const bridge = window.coreBridge;
+            const originalJob = bridge.activeGenerationJob;
+            const originalStop = bridge.stopActiveGeneration;
+            const calls = [];
+
+            bridge.activeGenerationJob = { jobId: 'remote-stop-job', status: 'STREAMING' };
+            bridge.stopActiveGeneration = async (reason) => {
+                calls.push({ reason, jobId: bridge.activeGenerationJob?.jobId });
+                return { status: 'ABORTED' };
+            };
+
+            try {
+                return {
+                    stopped: script.stopGeneration(),
+                    calls,
+                };
+            } finally {
+                bridge.activeGenerationJob = originalJob;
+                bridge.stopActiveGeneration = originalStop;
+            }
+        });
+
+        expect(result.stopped).toBe(true);
+        expect(result.calls).toEqual([{
+            reason: 'Clicked stop button',
+            jobId: 'remote-stop-job',
+        }]);
+    });
+
+    test('tracks active jobs and deduplicates repeated remote abort requests', async ({ page }) => {
+        const result = await page.evaluate(async () => {
+            const { BridgeClient } = await import('/scripts/core/bridge-client.js');
+            const client = new BridgeClient();
+            client.connect = async () => { };
+
+            const abortCalls = [];
+            client.abortGeneration = async (jobId, reason) => {
+                abortCalls.push({ jobId, reason });
+                await new Promise((resolve) => setTimeout(resolve, 10));
+                return { status: 'ABORTED', jobId };
+            };
+
+            client.dispatchGenerationEvent('generation:started', {
+                jobId: 'active-job',
+                status: 'PREPARING',
+            });
+            const first = client.stopActiveGeneration('first stop');
+            const second = client.stopActiveGeneration('second stop');
+            const results = await Promise.all([first, second]);
+
+            return {
+                abortCalls,
+                results,
+                activeGenerationJob: client.activeGenerationJob,
+            };
+        });
+
+        expect(result.abortCalls).toEqual([{
+            jobId: 'active-job',
+            reason: 'first stop',
+        }]);
+        expect(result.results).toEqual([
+            { status: 'ABORTED', jobId: 'active-job' },
+            { status: 'ABORTED', jobId: 'active-job' },
+        ]);
+        expect(result.activeGenerationJob).toEqual({
+            jobId: 'active-job',
+            status: 'PREPARING',
+        });
+    });
 });

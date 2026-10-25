@@ -303,6 +303,13 @@ export class PromptAssembler {
 
         // Merge user-specified prompts configuration
         for (const userPrompt of inputPrompts) {
+            if (worldInfoScan && ['worldInfoBefore', 'worldInfoAfter'].includes(userPrompt.identifier)) {
+                // The browser prompt collection may still contain the last
+                // client-side World Info materialization. Canonical entries
+                // were scanned above, so do not let that stale copy override
+                // the server-owned slot values.
+                continue;
+            }
             const existing = basePromptsMap.get(userPrompt.identifier);
             if (existing) {
                 basePromptsMap.set(userPrompt.identifier, {
