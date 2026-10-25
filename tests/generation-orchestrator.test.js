@@ -603,6 +603,79 @@ describe('Generation Orchestrator & Server Job Manager Test Suite', () => {
             expect(jobManager.jobs.size).toBe(0);
         });
 
+        test('Executes server-context plugin interception exactly once before gateway dispatch', async () => {
+            const previousPluginFlag = process.env.SILLYTAVERN_CORE_GENERATION_PLUGININTERCEPTIONENABLED;
+            process.env.SILLYTAVERN_CORE_GENERATION_PLUGININTERCEPTIONENABLED = 'true';
+
+            try {
+                const interceptionPayloads = [];
+                const gatewayBodies = [];
+                const gateway = async (req, res) => {
+                    gatewayBodies.push(req.body);
+                    res.send({ choices: [{ message: { content: 'Plugin-aware response' } }] });
+                };
+                mockWsBridge.requestInterception = async (_user, eventName, payload) => {
+                    interceptionPayloads.push({ eventName, payload });
+                    return {
+                        ...payload,
+                        chat: [...payload.chat, { role: 'system', content: 'PLUGIN_MARKER' }],
+                    };
+                };
+                jobManager = new JobManager({
+                    generateHandler: gateway,
+                    sessionEngine: mockSessionEngine,
+                    wsBridge: mockWsBridge,
+                });
+
+                const job = await jobManager.createJob({
+                    userId: 'alice',
+                    body: {
+                        core_prompt_mode: 'server_context',
+                        core_prompt_context: {
+                            schemaVersion: 1,
+                            settings: {
+                                source: 'openai',
+                                model: 'test-model',
+                                maxContext: 1000,
+                                maxTokens: 100,
+                                newChatPrompt: '[Chat begins]',
+                            },
+                            generationControl: { type: 'normal', dryRun: false },
+                            characterContext: { name1: 'Alice', name2: 'Seraphina' },
+                            worldInfo: { worldInfoBefore: '', worldInfoAfter: '' },
+                            promptOrder: ['main', 'chatHistory'],
+                            prompts: [{ identifier: 'chatHistory', role: 'system', content: '' }],
+                            extensionPrompts: {},
+                            chatHistory: [{ role: 'user', content: 'Hello' }],
+                            messageExamples: [],
+                            toolsContext: { canPerformToolCalls: false },
+                            recordedTokenCounts: {
+                                main: 1,
+                                newMainChat: 1,
+                                'chatHistory-1': 1,
+                            },
+                        },
+                    },
+                });
+
+                await new Promise((resolve) => job.once('completed', resolve));
+
+                expect(interceptionPayloads).toHaveLength(1);
+                expect(interceptionPayloads[0].eventName).toBe('chat_completion_prompt_ready');
+                expect(gatewayBodies).toHaveLength(1);
+                expect(gatewayBodies[0].messages).toEqual(expect.arrayContaining([
+                    { role: 'system', content: 'PLUGIN_MARKER' },
+                ]));
+                expect(gatewayBodies[0].core_prompt_context).toBeUndefined();
+            } finally {
+                if (previousPluginFlag === undefined) {
+                    delete process.env.SILLYTAVERN_CORE_GENERATION_PLUGININTERCEPTIONENABLED;
+                } else {
+                    process.env.SILLYTAVERN_CORE_GENERATION_PLUGININTERCEPTIONENABLED = previousPluginFlag;
+                }
+            }
+        });
+
         test('Does not settle a completed job into a different active chat', async () => {
             const gateway = async (_req, res) => {
                 res.send({ choices: [{ message: { content: 'chat A response' } }] });

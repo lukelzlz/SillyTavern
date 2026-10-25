@@ -241,6 +241,9 @@ export class JobManager extends EventEmitter {
         }
 
         if (mode === 'server_context') {
+            if (!this.isServerPromptAssemblyEnabled()) {
+                throw invalidGenerationRequest('server_context prompt mode is unavailable while server prompt assembly is disabled.');
+            }
             const validation = validateCorePromptContext(body.core_prompt_context);
             if (!validation.valid) {
                 throw invalidGenerationRequest(`Invalid core_prompt_context: ${validation.issues.join('; ')}`);
