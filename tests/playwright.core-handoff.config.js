@@ -1,7 +1,7 @@
 import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
-    testMatch: 'frontend/CorePromptHandoff.real.e2e.js',
+    testMatch: ['frontend/CorePromptHandoff.real.e2e.js', 'frontend/CoreGenerationUI.real.e2e.js'],
     timeout: 60000,
     use: {
         channel: 'chromium',

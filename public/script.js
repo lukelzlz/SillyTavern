@@ -3918,7 +3918,13 @@ class StreamingProcessor {
                 this.images = state?.images ?? [];
                 this.reasoningSignature = state?.signature ?? null;
                 await eventSource.emit(event_types.STREAM_TOKEN_RECEIVED, text);
-                await sw.tick(async () => await this.onProgressStreaming(this.messageId, this.continueMessage + text));
+                // A fast first token must not remain hidden behind the placeholder
+                // while the provider pauses. Throttle only subsequent updates.
+                if (timestamps.length === 1) {
+                    await this.onProgressStreaming(this.messageId, this.continueMessage + text);
+                } else {
+                    await sw.tick(async () => await this.onProgressStreaming(this.messageId, this.continueMessage + text));
+                }
             }
             const seconds = (timestamps[timestamps.length - 1] - timestamps[0]) / 1000;
             console.warn(`Stream stats: ${timestamps.length} tokens, ${seconds.toFixed(2)} seconds, rate: ${Number(timestamps.length / seconds).toFixed(2)} TPS`);

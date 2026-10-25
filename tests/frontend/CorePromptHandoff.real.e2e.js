@@ -182,6 +182,9 @@ test.describe('Real Core prompt handoff transport', () => {
 
             const jobId = window.coreBridge.activeGenerationJob?.jobId || null;
             const stopped = script.stopGeneration();
+            // Do not race HTTP gate release against the fire-and-forget WS abort.
+            await window.coreBridge.activeGenerationAbortPromise;
+            const stoppedJob = await window.coreBridge.getGenerationJob(jobId);
             await fetch(`${providerUrl}/control/release`, { method: 'POST' });
             await streamPromise;
 
@@ -189,6 +192,7 @@ test.describe('Real Core prompt handoff transport', () => {
                 mode,
                 jobId,
                 stopped,
+                status: stoppedJob.job.status,
                 streamError,
                 activeGenerationJob: window.coreBridge.activeGenerationJob,
             };
@@ -197,6 +201,7 @@ test.describe('Real Core prompt handoff transport', () => {
         expect(result.mode).toBe('server_context');
         expect(result.jobId).toEqual(expect.any(String));
         expect(result.stopped).toBe(true);
+        expect(result.status).toBe('ABORTED');
         expect(result.streamError).toMatch(/aborted|closed|clicked stop button/i);
         expect(result.activeGenerationJob).toBeNull();
     });

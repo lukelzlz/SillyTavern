@@ -21,7 +21,7 @@ export const test = base.extend({
                 provider.once('exit', code => { clearTimeout(timer); reject(new Error(`Provider exited: ${code}`)); });
             });
             await server.start({ enableUserAccounts: false, browserHandoff: true });
-            await use({ baseUrl: server.baseUrl, providerUrl: `http://127.0.0.1:${port}` });
+            await use({ baseUrl: server.baseUrl, providerUrl: `http://127.0.0.1:${port}`, dataRoot: server.dataRoot });
         } finally {
             try {
                 await server.stop();
