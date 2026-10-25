@@ -1,0 +1,206 @@
+{
+  "fixtureId": "GF-PROMPT-09-world-info-all-slots",
+  "description": "Browser-shaped server handoff covering all canonical World Info slots and final Prompt topology",
+  "recordedAt": "2026-10-25T00:00:00Z",
+  "clientVersion": "1.19.0",
+  "input": {
+    "schemaVersion": 1,
+    "settings": {
+      "source": "openai",
+      "model": "gpt-4o",
+      "maxContext": 4096,
+      "maxTokens": 500,
+      "pinExamples": true,
+      "newChatPrompt": "[Chat begins]",
+      "newExampleChatPrompt": "[Example Chat]",
+      "scenarioFormat": "[Scenario: {{scenario}}]",
+      "personalityFormat": "[Personality: {{personality}}]"
+    },
+    "generationControl": {
+      "type": "normal",
+      "dryRun": false
+    },
+    "characterContext": {
+      "name1": "Alice",
+      "name2": "Seraphina",
+      "charDescription": "Seraphina is a master artificer.",
+      "charPersonality": "Curious and precise.",
+      "scenario": "A rainy clocktower workshop.",
+      "personaDescription": "Alice is a wandering scholar."
+    },
+    "worldInfo": {
+      "worldInfoBefore": "stale browser before",
+      "worldInfoAfter": "stale browser after",
+      "entries": [
+        {
+          "uid": "slot-before",
+          "constant": true,
+          "position": 0,
+          "order": 10,
+          "content": "Canonical World Info before."
+        },
+        {
+          "uid": "slot-after",
+          "constant": true,
+          "position": 1,
+          "order": 20,
+          "content": "Canonical World Info after."
+        },
+        {
+          "uid": "slot-an-top",
+          "constant": true,
+          "position": 2,
+          "order": 30,
+          "content": "Canonical Author's Note top."
+        },
+        {
+          "uid": "slot-an-bottom",
+          "constant": true,
+          "position": 3,
+          "order": 40,
+          "content": "Canonical Author's Note bottom."
+        },
+        {
+          "uid": "slot-depth",
+          "constant": true,
+          "position": 4,
+          "depth": 1,
+          "role": 1,
+          "order": 50,
+          "content": "Canonical depth user injection."
+        },
+        {
+          "uid": "slot-em-top",
+          "constant": true,
+          "position": 5,
+          "order": 60,
+          "content": "Canonical EM top."
+        },
+        {
+          "uid": "slot-em-bottom",
+          "constant": true,
+          "position": 6,
+          "order": 70,
+          "content": "Canonical EM bottom."
+        },
+        {
+          "uid": "slot-outlet",
+          "constant": true,
+          "position": 7,
+          "outletName": "lore",
+          "order": 80,
+          "content": "Canonical outlet lore."
+        }
+      ],
+      "options": {
+        "budget": 0,
+        "maxRecursionSteps": 3,
+        "caseSensitive": false,
+        "matchWholeWords": false
+      }
+    },
+    "promptOrder": [
+      "worldInfoBefore",
+      "main",
+      "worldInfoAfter",
+      "charDescription",
+      "charPersonality",
+      "scenario",
+      "personaDescription",
+      "authorsNote",
+      "outletPrompt",
+      "dialogueExamples",
+      "chatHistory"
+    ],
+    "prompts": [
+      {
+        "identifier": "authorsNote",
+        "role": "system",
+        "content": "Base Author's Note."
+      },
+      {
+        "identifier": "outletPrompt",
+        "role": "system",
+        "content": "Lore outlet: {{outlet::lore}}"
+      }
+    ],
+    "extensionPrompts": {},
+    "chatHistory": [
+      {
+        "role": "user",
+        "content": "The clocktower is humming.",
+        "name": "Alice"
+      },
+      {
+        "role": "assistant",
+        "content": "I can hear the regulator turning.",
+        "name": "Seraphina"
+      }
+    ],
+    "messageExamples": [
+      [
+        {
+          "role": "system",
+          "content": "Example dialogue from the character card.",
+          "name": "Seraphina"
+        }
+      ]
+    ],
+    "toolsContext": {
+      "canPerformToolCalls": false
+    },
+    "recordedTokenCounts": {}
+  },
+  "browserFinal": {
+    "chat": [
+      { "role": "system", "content": "Canonical World Info before." },
+      { "role": "system", "content": "You are Seraphina." },
+      { "role": "system", "content": "Canonical World Info after." },
+      { "role": "system", "content": "Seraphina is a master artificer." },
+      { "role": "system", "content": "[Personality: Curious and precise.]" },
+      { "role": "system", "content": "[Scenario: A rainy clocktower workshop.]" },
+      { "role": "system", "content": "Alice is a wandering scholar." },
+      { "role": "system", "content": "Canonical Author's Note top.\nBase Author's Note.\nCanonical Author's Note bottom." },
+      { "role": "system", "content": "Lore outlet: Canonical outlet lore." },
+      { "role": "system", "content": "Canonical EM top." },
+      { "role": "system", "content": "[Example Chat]" },
+      { "role": "system", "content": "Example dialogue from the character card.", "name": "Seraphina" },
+      { "role": "system", "content": "Canonical EM bottom." },
+      { "role": "system", "content": "[Chat begins]" },
+      { "role": "user", "content": "The clocktower is humming.", "name": "Alice" },
+      { "role": "user", "content": "Canonical depth user injection." },
+      { "role": "assistant", "content": "I can hear the regulator turning.", "name": "Seraphina" }
+    ]
+  },
+  "expectedOutput": {
+    "chat": [
+      { "role": "system", "content": "Canonical World Info before." },
+      { "role": "system", "content": "You are Seraphina." },
+      { "role": "system", "content": "Canonical World Info after." },
+      { "role": "system", "content": "Seraphina is a master artificer." },
+      { "role": "system", "content": "[Personality: Curious and precise.]" },
+      { "role": "system", "content": "[Scenario: A rainy clocktower workshop.]" },
+      { "role": "system", "content": "Alice is a wandering scholar." },
+      { "role": "system", "content": "Canonical Author's Note top.\nBase Author's Note.\nCanonical Author's Note bottom." },
+      { "role": "system", "content": "Lore outlet: Canonical outlet lore." },
+      { "role": "system", "content": "Canonical EM top." },
+      { "role": "system", "content": "[Example Chat]" },
+      { "role": "system", "content": "Example dialogue from the character card.", "name": "Seraphina" },
+      { "role": "system", "content": "Canonical EM bottom." },
+      { "role": "system", "content": "[Chat begins]" },
+      { "role": "user", "content": "The clocktower is humming.", "name": "Alice" },
+      { "role": "user", "content": "Canonical depth user injection." },
+      { "role": "assistant", "content": "I can hear the regulator turning.", "name": "Seraphina" }
+    ],
+    "activatedEntryUids": [
+      "slot-before",
+      "slot-after",
+      "slot-an-top",
+      "slot-an-bottom",
+      "slot-depth",
+      "slot-em-top",
+      "slot-em-bottom",
+      "slot-outlet"
+    ]
+  }
+}

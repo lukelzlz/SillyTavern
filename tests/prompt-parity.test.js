@@ -433,6 +433,28 @@ describe('Prompt Parity Phase 1: 8 Golden Fixture Differential Tests', () => {
         expect(dialogueIndex).toBeLessThan(bottomIndex);
         expect(output.metadata.worldInfoScan.activatedEntryUids).toEqual(['em-top', 'em-bottom']);
     });
+
+    test('GF-PROMPT-09: Browser/server differential covers every canonical World Info slot', async () => {
+        const fixture = loadFixture('GF-PROMPT-09-world-info-all-slots.json');
+        expect(validateCorePromptContext(fixture.input)).toEqual({ valid: true, issues: [] });
+
+        const output = await PromptAssembler.assemble(fixture.input, {
+            tokenizer: new DualTrackTokenizer({
+                tokenizer: createPromptTokenizer({ source: 'openai', model: 'gpt-4o' }),
+            }),
+        });
+
+        // browserFinal is the captured PromptManager/browser golden output;
+        // expectedOutput is the server-side contract expected from the same
+        // canonical context envelope. Both must remain byte-for-byte equal.
+        expect(fixture.browserFinal.chat).toEqual(fixture.expectedOutput.chat);
+        expect(output.chat).toEqual(fixture.browserFinal.chat);
+        expect(output.metadata.worldInfoScan.activatedEntryUids).toEqual(fixture.expectedOutput.activatedEntryUids);
+        expect(output.chat).not.toEqual(expect.arrayContaining([
+            { role: 'system', content: 'stale browser before' },
+            { role: 'system', content: 'stale browser after' },
+        ]));
+    });
 });
 
 describe('Prompt Parity: Dual-Track Tokenizer & Fail-Closed Guardrails', () => {

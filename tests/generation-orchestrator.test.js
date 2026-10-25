@@ -1421,6 +1421,113 @@ describe('Generation Orchestrator & Server Job Manager Test Suite', () => {
             jobManager.generateHandler = previousHandler;
         });
 
+        test('runs a real authenticated server_context generation through PromptAssembler and gateway', async () => {
+            const { jobManager } = await import('../src/core/generation/job-manager.js');
+            const previousHandler = jobManager.generateHandler;
+            const gatewayBodies = [];
+            jobManager.generateHandler = async (req, res) => {
+                gatewayBodies.push(req.body);
+                res.write('data: {"choices":[{"delta":{"content":"server"}}]}\n\n');
+                res.write('data: [DONE]\n\n');
+                res.end();
+            };
+
+            try {
+                const requestId = 'server-context-ws-request';
+                const createdPromise = waitForMessage(
+                    aliceWs,
+                    (message) => message.type === 'job:created' && message.requestId === requestId,
+                );
+                const completedPromise = waitForMessage(
+                    aliceWs,
+                    (message) => message.type === 'event'
+                        && message.event === 'generation:completed'
+                        && message.data?.fullText === 'server',
+                );
+
+                aliceWs.send(JSON.stringify({
+                    type: 'generate:start',
+                    id: requestId,
+                    payload: {
+                        core_prompt_mode: 'server_context',
+                        core_prompt_interception: false,
+                        stream: true,
+                        chat_completion_source: 'openai',
+                        model: 'test-model',
+                        core_prompt_context: {
+                            schemaVersion: 1,
+                            settings: {
+                                source: 'openai',
+                                model: 'test-model',
+                                maxContext: 1000,
+                                maxTokens: 100,
+                                newChatPrompt: '[Chat begins]',
+                                newExampleChatPrompt: '[Example Chat]',
+                            },
+                            generationControl: { type: 'normal', dryRun: false },
+                            characterContext: { name1: 'Alice', name2: 'Seraphina' },
+                            worldInfo: {
+                                worldInfoBefore: 'stale browser value',
+                                worldInfoAfter: '',
+                                entries: [
+                                    {
+                                        uid: 'ws-before',
+                                        constant: true,
+                                        position: 0,
+                                        content: 'WS canonical World Info.',
+                                    },
+                                    {
+                                        uid: 'ws-an',
+                                        constant: true,
+                                        position: 2,
+                                        content: 'WS canonical Author Note.',
+                                    },
+                                    {
+                                        uid: 'ws-outlet',
+                                        constant: true,
+                                        position: 7,
+                                        outletName: 'lore',
+                                        content: 'WS canonical outlet.',
+                                    },
+                                ],
+                                options: { budget: 0 },
+                            },
+                            promptOrder: ['worldInfoBefore', 'main', 'authorsNote', 'outletPrompt', 'chatHistory'],
+                            prompts: [
+                                { identifier: 'authorsNote', role: 'system', content: 'WS base note.' },
+                                { identifier: 'outletPrompt', role: 'system', content: 'WS lore: {{outlet::lore}}' },
+                            ],
+                            extensionPrompts: {},
+                            chatHistory: [{ role: 'user', content: 'The signal is active.' }],
+                            messageExamples: [],
+                            toolsContext: { canPerformToolCalls: false },
+                            recordedTokenCounts: {},
+                        },
+                    },
+                }));
+
+                const created = await createdPromise;
+                const completed = await completedPromise;
+
+                expect(completed.data.jobId).toBe(created.jobId);
+                expect(completed.data.fullText).toBe('server');
+                expect(gatewayBodies).toHaveLength(1);
+                expect(gatewayBodies[0].core_prompt_context).toBeUndefined();
+                expect(gatewayBodies[0].core_prompt_mode).toBeUndefined();
+                expect(gatewayBodies[0].messages).toEqual(expect.arrayContaining([
+                    { role: 'system', content: 'WS canonical World Info.' },
+                    { role: 'system', content: 'WS canonical Author Note.\nWS base note.' },
+                    { role: 'system', content: 'WS lore: WS canonical outlet.' },
+                    { role: 'user', content: 'The signal is active.' },
+                ]));
+                expect(gatewayBodies[0].messages).not.toEqual(expect.arrayContaining([
+                    { role: 'system', content: 'stale browser value' },
+                ]));
+            } finally {
+                jobManager.generateHandler = previousHandler;
+            }
+        });
+
         test('broadcasts reasoning, tool-call, and usage metadata from the provider stream', async () => {
             const { jobManager } = await import('../src/core/generation/job-manager.js');
             const previousHandler = jobManager.generateHandler;

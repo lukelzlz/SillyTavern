@@ -706,7 +706,10 @@ export class PromptAssembler {
 
             addWorldInfoExamples('before');
 
-            const newExampleChatContent = PromptAssembler.substituteMacros(settings.newChatPrompt || '---', macroVars);
+            const newExampleChatContent = PromptAssembler.substituteMacros(
+                settings.newExampleChatPrompt || settings.newChatPrompt || '---',
+                macroVars,
+            );
             const newExampleChat = {
                 role: 'system',
                 content: newExampleChatContent,

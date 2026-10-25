@@ -25,6 +25,8 @@ status: tested
 9. 浏览器 server_context 能力判定不再强制依赖插件拦截开关；无插件时可直接走服务端 PromptAssembler，有插件时再进入可选拦截握手。
 10. server_context 请求不再在浏览器重复执行最终 Prompt 组装与 token 预算计算，浏览器只生成 canonical context envelope，服务端负责权威 Prompt。
 11. server_context 会携带浏览器是否存在 `CHAT_COMPLETION_PROMPT_READY` 监听器；无监听器时服务端跳过拦截等待，有监听器时才启用 WS 拦截握手。
+12. 新增 `GF-PROMPT-09-world-info-all-slots` browser/server golden differential fixture，覆盖八种 World Info 槽位、PromptManager 顺序、examples、Author's Note、outlet、depth 与 stale browser 内容覆盖。
+13. 新增 authenticated Core WS `server_context` 真实生成链路测试，验证 WebSocket → JobManager → PromptAssembler → gateway → generation:completed 全链路。
 
 ## 验证记录
 
@@ -39,6 +41,8 @@ status: tested
 - 本轮完整回归：`cd tests && npm run test:unit` 通过，28 suites / 593 tests。
 - 本轮 server_context 闭环增量：`npm run lint` 通过；`cd tests && npm run test:unit -- core-bridge.test.js generation-orchestrator.test.js --runInBand` 通过，62 tests。
 - 本轮完整回归：`cd tests && npm run test:unit` 通过，28 suites / 594 tests。
+- 本轮 browser/server differential 与真实 WS 增量：`cd tests && npm run test:unit -- prompt-parity.test.js generation-orchestrator.test.js --runInBand` 通过，85 tests。
+- 本轮完整回归：`cd tests && npm run test:unit` 通过，28 suites / 596 tests。
 
 ## 未完成与下一阶段
 
