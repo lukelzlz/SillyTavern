@@ -107,6 +107,7 @@ import {
     openai_messages_count,
     chat_completion_sources,
     getChatCompletionModel,
+    getCorePromptHandoffMode,
     proxies,
     loadProxyPresets,
     selected_proxy,
@@ -5266,6 +5267,9 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     let thisPromptBits = [];
 
     let generate_data;
+    let corePromptContext = null;
+    /** @type {'client_final'|'server_context'} */
+    let corePromptMode = 'client_final';
     switch (main_api) {
         case 'koboldhorde':
         case 'kobold':
@@ -5301,10 +5305,17 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             break;
         }
         case 'openai': {
-            let [prompt, counts] = await prepareOpenAIMessages({
+            const requestedCorePromptMode = getCorePromptHandoffMode({
+                type,
+                dryRun,
+                jsonSchema,
+                canPerformToolCalls,
+            });
+            let [prompt, counts, preparedCorePromptContext, preparedCorePromptMode] = await prepareOpenAIMessages({
                 name2: name2,
                 charDescription: description,
                 charPersonality: personality,
+                personaDescription: persona,
                 scenario: scenario,
                 worldInfoBefore: worldInfoBefore,
                 worldInfoAfter: worldInfoAfter,
@@ -5318,7 +5329,10 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 jailbreakPromptOverride: jailbreak,
                 messages: oaiMessages,
                 messageExamples: oaiMessageExamples,
+                corePromptMode: requestedCorePromptMode,
             }, dryRun);
+            corePromptContext = preparedCorePromptContext;
+            corePromptMode = preparedCorePromptMode;
             generate_data = { prompt: prompt };
 
             // TODO: move these side-effects somewhere else, so this switch-case solely sets generate_data
@@ -5409,7 +5423,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 streamingProcessor.firstMessageText = '';
             }
 
-            streamingProcessor.generator = await sendStreamingRequest(type, generate_data, { jsonSchema });
+            streamingProcessor.generator = await sendStreamingRequest(type, generate_data, { jsonSchema, corePromptContext, corePromptMode });
             streamingProcessor.coreGenerationJobId = streamingProcessor.generator?.coreGenerationJobId ?? null;
 
             hideSwipeButtons();
@@ -5466,7 +5480,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 });
             }
         } else {
-            return await sendGenerationRequest(type, generate_data, { jsonSchema });
+            return await sendGenerationRequest(type, generate_data, { jsonSchema, corePromptContext, corePromptMode });
         }
     }
 
@@ -6123,6 +6137,8 @@ function setInContextMessages(msgInContextCount, type) {
 /**
  * @typedef {object} AdditionalRequestOptions
  * @property {JsonSchema} [jsonSchema]
+ * @property {object|null} [corePromptContext] Canonical server-owned prompt context for Core handoff
+ * @property {'client_final'|'server_context'} [corePromptMode] Explicit Core prompt ownership mode
  */
 
 /**
@@ -6135,7 +6151,10 @@ function setInContextMessages(msgInContextCount, type) {
  */
 export async function sendGenerationRequest(type, data, options = {}) {
     if (main_api === 'openai') {
-        return await sendOpenAIRequest(type, data.prompt, abortController.signal, options);
+        return await sendOpenAIRequest(type, data.prompt, abortController.signal, {
+            ...options,
+            corePromptContext: options.corePromptContext ?? null,
+        });
     }
 
     if (main_api === 'koboldhorde') {
@@ -6171,7 +6190,10 @@ export async function sendStreamingRequest(type, data, options = {}) {
 
     switch (main_api) {
         case 'openai':
-            return await sendOpenAIRequest(type, data.prompt, streamingProcessor.abortController.signal, options);
+            return await sendOpenAIRequest(type, data.prompt, streamingProcessor.abortController.signal, {
+                ...options,
+                corePromptContext: options.corePromptContext ?? null,
+            });
         case 'textgenerationwebui':
             return await generateTextGenWithStreaming(data, streamingProcessor.abortController.signal);
         case 'novel':

@@ -86,6 +86,70 @@ describe('Prompt Parity Phase 1: 8 Golden Fixture Differential Tests', () => {
         expect(output.chat[2].content[1].type).toBe('image_url');
         expect(output.providerTransforms?.claude).toBeDefined();
     });
+
+    test('Browser-shaped contexts preserve the explicit PromptManager order', async () => {
+        const fixture = loadFixture('GF-PROMPT-01-standard-chat.json');
+        const input = structuredClone(fixture.input);
+        input.promptOrder = [
+            'main',
+            'charDescription',
+            'worldInfoBefore',
+            'worldInfoAfter',
+            'charPersonality',
+            'scenario',
+            'personaDescription',
+        ];
+
+        const output = await PromptAssembler.assemble(input);
+
+        expect(output.chat.slice(0, 7).map((message) => message.content)).toEqual([
+            'You are Seraphina.',
+            'Seraphina is a master artificer of clockwork machines.',
+            'Eldoria is powered by arcane brass gears.',
+            'The Grand Regulator maintains temporal synchronization.',
+            '[Personality: Curious, meticulous, and articulate.]',
+            '[Scenario: The clocktower workshop on a rainy afternoon.]',
+            'Alice is a wandering scholar.',
+        ]);
+    });
+
+    test('Browser-shaped contexts can place an active custom prompt in the declared order', async () => {
+        const fixture = loadFixture('GF-PROMPT-01-standard-chat.json');
+        const input = structuredClone(fixture.input);
+        input.prompts = [{
+            identifier: 'customDirective',
+            role: 'system',
+            content: 'Answer with precise measurements.',
+        }];
+        input.promptOrder = ['main', 'customDirective', 'charDescription'];
+        input.recordedTokenCounts.customDirective = 4;
+
+        const output = await PromptAssembler.assemble(input);
+
+        expect(output.chat.slice(0, 3).map((message) => message.content)).toEqual([
+            'You are Seraphina.',
+            'Answer with precise measurements.',
+            'Seraphina is a master artificer of clockwork machines.',
+        ]);
+    });
+
+    test('Explicit prompt order does not resurrect a disabled browser prompt', async () => {
+        const fixture = loadFixture('GF-PROMPT-01-standard-chat.json');
+        const input = structuredClone(fixture.input);
+        input.promptOrder = ['main', 'chatHistory'];
+        input.recordedTokenCounts = {
+            main: 6,
+            newMainChat: 5,
+            'chatHistory-1': 14,
+            'chatHistory-2': 16,
+            'chatHistory-3': 11,
+        };
+
+        const output = await PromptAssembler.assemble(input);
+
+        expect(output.chat.map((message) => message.content)).not.toContain('Seraphina is a master artificer of clockwork machines.');
+        expect(output.chat.map((message) => message.content)).toContain('You are Seraphina.');
+    });
 });
 
 describe('Prompt Parity: Dual-Track Tokenizer & Fail-Closed Guardrails', () => {

@@ -134,6 +134,7 @@ export class WebSocketBridge {
                 capabilities: {
                     orchestrator: getCoreConfig('core.generation.orchestratorEnabled', true, 'boolean'),
                     serverPromptAssembly: getCoreConfig('core.generation.serverPromptAssemblyEnabled', true, 'boolean'),
+                    browserPromptHandoff: getCoreConfig('core.generation.browserPromptHandoffEnabled', false, 'boolean'),
                     promptInterception: getCoreConfig('core.generation.pluginInterceptionEnabled', false, 'boolean'),
                 },
                 activeJob,

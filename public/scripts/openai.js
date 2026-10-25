@@ -1517,6 +1517,187 @@ async function preparePromptsForChatCompletion({ scenario, charPersonality, name
 }
 
 /**
+ * Serializes the browser's active PromptManager view into the canonical
+ * server-context envelope. This is deliberately a pure handoff helper: it
+ * does not assemble messages and it does not emit CHAT_COMPLETION_PROMPT_READY.
+ *
+ * @param {object} [options={}]
+ * @param {import('./PromptManager.js').PromptCollection} [options.prompts]
+ * @param {object[]} [options.messages] Browser-normalized history, newest first
+ * @param {object[][]} [options.messageExamples]
+ * @param {string} [options.name1]
+ * @param {string} [options.name2]
+ * @param {string} [options.charDescription]
+ * @param {string} [options.charPersonality]
+ * @param {string} [options.personaDescription]
+ * @param {string} [options.scenario]
+ * @param {string} [options.worldInfoBefore]
+ * @param {string} [options.worldInfoAfter]
+ * @param {string} [options.systemPromptOverride]
+ * @param {string} [options.jailbreakPromptOverride]
+ * @param {string} [options.type]
+ * @param {string} [options.quietPrompt]
+ * @param {any} [options.quietImage]
+ * @param {string} [options.cyclePrompt]
+ * @param {string} [options.bias]
+ * @param {boolean} [options.dryRun]
+ * @returns {object}
+ */
+export function buildCorePromptContext({
+    prompts,
+    messages = [],
+    messageExamples = [],
+    name1,
+    name2,
+    charDescription,
+    charPersonality,
+    personaDescription,
+    scenario,
+    worldInfoBefore,
+    worldInfoAfter,
+    systemPromptOverride,
+    jailbreakPromptOverride,
+    type = 'normal',
+    quietPrompt = '',
+    quietImage = null,
+    cyclePrompt = '',
+    bias = '',
+    dryRun = false,
+} = {}) {
+    const serializePrompt = (prompt) => {
+        if (!prompt || typeof prompt !== 'object') return null;
+        return {
+            identifier: prompt.identifier,
+            role: prompt.role,
+            content: structuredClone(prompt.content),
+            ...(prompt.name !== undefined ? { name: prompt.name } : {}),
+            ...(prompt.system_prompt !== undefined ? { system_prompt: prompt.system_prompt } : {}),
+            ...(prompt.position !== undefined ? { position: prompt.position } : {}),
+            ...(prompt.injection_depth !== undefined ? { injection_depth: prompt.injection_depth } : {}),
+            ...(prompt.injection_position !== undefined ? { injection_position: prompt.injection_position } : {}),
+            ...(prompt.injection_order !== undefined ? { injection_order: prompt.injection_order } : {}),
+            ...(prompt.injection_trigger !== undefined ? { injection_trigger: structuredClone(prompt.injection_trigger) } : {}),
+            ...(prompt.forbid_overrides !== undefined ? { forbid_overrides: prompt.forbid_overrides } : {}),
+            ...(prompt.extension !== undefined ? { extension: prompt.extension } : {}),
+        };
+    };
+
+    const collection = Array.isArray(prompts?.collection)
+        ? prompts.collection.map(serializePrompt).filter(Boolean)
+        : [];
+
+    return {
+        schemaVersion: 1,
+        settings: {
+            source: oai_settings.chat_completion_source,
+            model: getChatCompletionModel(oai_settings),
+            maxContext: Number(promptManager?.serviceSettings?.openai_max_context || oai_settings.openai_max_context),
+            maxTokens: Number(promptManager?.serviceSettings?.openai_max_tokens || oai_settings.openai_max_tokens),
+            squashSystemMessages: Boolean(oai_settings.squash_system_messages),
+            pinExamples: Boolean(power_user.pin_examples),
+            namesBehavior: oai_settings.names_behavior,
+            newChatPrompt: oai_settings.new_chat_prompt,
+            newGroupChatPrompt: oai_settings.new_group_chat_prompt,
+            newExampleChatPrompt: oai_settings.new_example_chat_prompt,
+            scenarioFormat: oai_settings.scenario_format,
+            personalityFormat: oai_settings.personality_format,
+            continuePrefill: Boolean(oai_settings.continue_prefill),
+            continueNudgePrompt: oai_settings.continue_nudge_prompt,
+        },
+        generationControl: {
+            type,
+            dryRun: Boolean(dryRun),
+            bias,
+            quietPrompt,
+            quietImage: quietImage ? structuredClone(quietImage) : null,
+            cyclePrompt,
+        },
+        characterContext: {
+            name1,
+            name2,
+            charDescription,
+            charPersonality,
+            personaDescription,
+            scenario,
+            systemPromptOverride,
+            jailbreakPromptOverride,
+        },
+        worldInfo: {
+            worldInfoBefore,
+            worldInfoAfter,
+        },
+        promptOrder: collection.map((prompt) => prompt.identifier),
+        prompts: collection,
+        // Extension prompts are already materialized into the active prompt
+        // collection above. Keeping this envelope empty prevents duplicate
+        // insertion when the server assembler merges known extension keys.
+        extensionPrompts: {},
+        // The browser's setOpenAIMessages() is newest-first; the canonical
+        // server contract is explicitly chronological, oldest-to-newest.
+        chatHistory: structuredClone(Array.isArray(messages) ? messages.slice().reverse() : []),
+        messageExamples: structuredClone(Array.isArray(messageExamples) ? messageExamples : []),
+        toolsContext: {
+            canPerformToolCalls: false,
+        },
+        recordedTokenCounts: {},
+    };
+}
+
+/**
+ * Selects the browser/server prompt owner for the constrained migration slice.
+ * The server advertises this capability only when the deployment explicitly
+ * enables browserPromptHandoffEnabled; all other requests remain client-owned.
+ * @param {object} [options={}]
+ * @param {string} [options.type='normal']
+ * @param {boolean} [options.dryRun=false]
+ * @param {any} [options.jsonSchema=null]
+ * @param {boolean} [options.canPerformToolCalls=false]
+ * @returns {'client_final'|'server_context'}
+ */
+export function getCorePromptHandoffMode({ type = 'normal', dryRun = false, jsonSchema = null, canPerformToolCalls = false } = {}) {
+    const constrainedNormalChat = type === 'normal'
+        && !dryRun
+        && !jsonSchema
+        && !canPerformToolCalls
+        && !selected_group
+        && main_api === 'openai'
+        && oai_settings.chat_completion_source === chat_completion_sources.OPENAI
+        && Boolean(oai_settings.stream_openai)
+        && Number(oai_settings.n) <= 1
+        && !['o1-2024-12-17', 'o1'].includes(getChatCompletionModel(oai_settings))
+        && coreBridge?.isReady
+        && coreBridge?.capabilities?.orchestrator === true
+        && coreBridge?.capabilities?.browserPromptHandoff === true
+        && coreBridge?.capabilities?.serverPromptAssembly === true
+        && coreBridge?.capabilities?.promptInterception === true;
+
+    return constrainedNormalChat ? 'server_context' : 'client_final';
+}
+
+function isSafeServerPromptContext(context) {
+    if (!context || context.schemaVersion !== 1) return false;
+    if (context.generationControl?.type !== 'normal') return false;
+    if (context.toolsContext?.canPerformToolCalls) return false;
+
+    const jailbreakPrompt = Array.isArray(context.prompts)
+        ? context.prompts.find((prompt) => prompt?.identifier === 'jailbreak')
+        : null;
+    // The browser places a populated jailbreak after chat history. The first
+    // server assembler slice keeps control prompts out of the migration until
+    // that cross-stage topology is represented explicitly.
+    if (jailbreakPrompt?.content) return false;
+
+    const messages = Array.isArray(context.chatHistory) ? context.chatHistory : [];
+    if (messages.some((message) => Array.isArray(message?.content)
+        || (Array.isArray(message?.media) && message.media.length > 0)
+        || (Array.isArray(message?.invocations) && message.invocations.length > 0))) {
+        return false;
+    }
+
+    return true;
+}
+
+/**
  * Take a configuration object and prepares messages for a chat with OpenAI's chat completion API.
  * Handles prompts, prepares chat history, manages token budget, and processes various user settings.
  *
@@ -1536,9 +1717,11 @@ async function preparePromptsForChatCompletion({ scenario, charPersonality, name
  * @param {string} content.jailbreakPromptOverride - The jailbreak prompt override.
  * @param {object} content.extensionPrompts - An array of additional prompts.
  * @param {object[]} content.messages - An array of messages to be used as chat history.
- * @param {string[]} content.messageExamples - An array of messages to be used as dialogue examples.
+ * @param {object[][]} content.messageExamples - An array of messages to be used as dialogue examples.
+ * @param {string} content.personaDescription - Persona text used by the server context contract.
+ * @param {'client_final'|'server_context'} [content.corePromptMode] Prompt ownership requested for this assembly.
  * @param dryRun - Whether this is a live call or not.
- * @returns {Promise<(any[]|boolean)[]>} An array where the first element is the prepared chat and the second element is a boolean flag.
+ * @returns {Promise<(any[]|boolean|object)[]>} Prepared chat, token counts, and canonical server context.
  */
 export async function prepareOpenAIMessages({
     name2,
@@ -1557,6 +1740,8 @@ export async function prepareOpenAIMessages({
     jailbreakPromptOverride,
     messages,
     messageExamples,
+    personaDescription,
+    corePromptMode = 'client_final',
 }, dryRun) {
     // Without a character selected, there is no way to accurately calculate tokens
     if (!promptManager.activeCharacter && dryRun) return [null, false];
@@ -1566,6 +1751,9 @@ export async function prepareOpenAIMessages({
 
     const userSettings = promptManager.serviceSettings;
     chatCompletion.setTokenBudget(userSettings.openai_max_context, userSettings.openai_max_tokens);
+
+    let corePromptContext = null;
+    let serverOwnsPrompt = false;
 
     try {
         // Merge markers and ordered user prompts with system prompts
@@ -1583,6 +1771,29 @@ export async function prepareOpenAIMessages({
             jailbreakPromptOverride,
             type,
         });
+
+        corePromptContext = buildCorePromptContext({
+            prompts,
+            messages,
+            messageExamples,
+            name1,
+            name2,
+            charDescription,
+            charPersonality,
+            personaDescription,
+            scenario,
+            worldInfoBefore,
+            worldInfoAfter,
+            systemPromptOverride,
+            jailbreakPromptOverride,
+            type,
+            quietPrompt,
+            quietImage,
+            cyclePrompt,
+            bias,
+            dryRun,
+        });
+        serverOwnsPrompt = corePromptMode === 'server_context' && isSafeServerPromptContext(corePromptContext);
 
         // Fill the chat completion with as much context as the budget allows
         await populateChatCompletion(prompts, chatCompletion, { bias, quietPrompt, quietImage, type, cyclePrompt, messages, messageExamples });
@@ -1606,6 +1817,10 @@ export async function prepareOpenAIMessages({
         // Pass chat completion to prompt manager for inspection
         promptManager.setChatCompletion(chatCompletion);
 
+        if (corePromptContext) {
+            corePromptContext.recordedTokenCounts = structuredClone(promptManager.tokenHandler.getCounts());
+        }
+
         if (oai_settings.squash_system_messages && dryRun == false) {
             await chatCompletion.squashSystemMessages();
         }
@@ -1616,12 +1831,14 @@ export async function prepareOpenAIMessages({
 
     const chat = chatCompletion.getChat();
 
-    const eventData = { chat, dryRun };
-    await eventSource.emit(event_types.CHAT_COMPLETION_PROMPT_READY, eventData);
+    if (!serverOwnsPrompt) {
+        const eventData = { chat, dryRun };
+        await eventSource.emit(event_types.CHAT_COMPLETION_PROMPT_READY, eventData);
+    }
 
     openai_messages_count = chat.filter(x => !x?.tool_calls && ['user', 'assistant', 'tool'].includes(x?.role)).length || 0;
 
-    return [chat, promptManager.tokenHandler.counts];
+    return [chat, promptManager.tokenHandler.counts, corePromptContext, serverOwnsPrompt ? 'server_context' : 'client_final'];
 }
 
 /**
@@ -3136,7 +3353,7 @@ export async function createGenerationParameters(settings, model, type, messages
  * @returns {Promise<unknown>}
  * @throws {Error}
  */
-async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } = {}) {
+async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null, corePromptContext = null, corePromptMode = 'client_final' } = {}) {
     // Provide default abort signal
     if (!signal) {
         signal = new AbortController().signal;
@@ -3160,16 +3377,26 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
     if (canUseCoreGeneration) {
         const coreGenerationJobId = `core-${uuidv4()}`;
         const coreRequestId = uuidv4();
+        const promptMode = corePromptMode === 'server_context'
+            && corePromptContext
+            && coreBridge?.capabilities?.browserPromptHandoff === true
+            && coreBridge?.capabilities?.serverPromptAssembly === true
+            ? 'server_context'
+            : 'client_final';
         generate_data.core_generation_job_id = coreGenerationJobId;
         generate_data.core_request_id = coreRequestId;
-        generate_data.core_prompt_mode = 'client_final';
+        generate_data.core_prompt_mode = promptMode;
         generate_data.chatId = getCurrentChatId() || null;
         generate_data.characterId = this_chid || null;
         generate_data.characterName = name2 || null;
-        // The browser has already emitted CHAT_COMPLETION_PROMPT_READY while
-        // assembling this request. Mark the payload so the server orchestrator
-        // does not invoke the same side-effectful plugin hook a second time.
-        generate_data.core_prompt_ready_handled = true;
+        if (promptMode === 'server_context') {
+            generate_data.core_prompt_context = structuredClone(corePromptContext);
+        } else {
+            // The browser has already emitted CHAT_COMPLETION_PROMPT_READY while
+            // assembling this request. Mark the payload so the server orchestrator
+            // does not invoke the same side-effectful plugin hook a second time.
+            generate_data.core_prompt_ready_handled = true;
+        }
 
         let coreStream;
         try {
@@ -3181,6 +3408,15 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
         } catch (error) {
             if (!['CORE_GENERATION_DISABLED', 'CORE_BRIDGE_UNAVAILABLE', 'CORE_BRIDGE_NOT_READY'].includes(error?.code)) {
                 throw error;
+            }
+            if (promptMode === 'server_context') {
+                // Server-context ownership skipped the browser hook. If the
+                // optional Core transport cannot be used, restore the native
+                // client lifecycle before falling back to HTTP.
+                await eventSource.emit(event_types.CHAT_COMPLETION_PROMPT_READY, {
+                    chat: generate_data.messages,
+                    dryRun: false,
+                });
             }
             // Keep the native HTTP path as the rollback contract when the
             // optional Core transport is disabled, disconnected, or has not
@@ -3196,6 +3432,7 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
             delete generate_data.characterId;
             delete generate_data.characterName;
             delete generate_data.core_prompt_ready_handled;
+            delete generate_data.core_prompt_context;
         } else {
             const bridgedStream = async function* () {
                 for await (const item of coreStream) {

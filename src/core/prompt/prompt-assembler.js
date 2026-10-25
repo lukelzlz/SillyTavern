@@ -103,6 +103,13 @@ export class PromptAssembler {
         const messageExamples = input.messageExamples || [];
         const toolsCtx = input.toolsContext || { canPerformToolCalls: false };
         const recordedCounts = input.recordedTokenCounts || {};
+        const requestedPromptOrder = Array.isArray(input.promptOrder)
+            ? input.promptOrder
+                .map((entry) => typeof entry === 'string' ? entry : entry?.identifier)
+                .filter((identifier) => typeof identifier === 'string' && identifier.length > 0)
+            : [];
+        const hasExplicitPromptOrder = requestedPromptOrder.length > 0;
+        const isExplicitPromptEnabled = (identifier) => !hasExplicitPromptOrder || requestedPromptOrder.includes(identifier);
 
         const tokenizer = options.tokenizer || new DualTrackTokenizer({
             recordedTokenCounts: recordedCounts,
@@ -177,13 +184,13 @@ export class PromptAssembler {
             });
         };
 
-        addBasePrompt('worldInfoBefore', 'system', worldInfo.worldInfoBefore || '');
-        addBasePrompt('main', 'system', 'You are {{char}}.');
-        addBasePrompt('worldInfoAfter', 'system', worldInfo.worldInfoAfter || '');
-        addBasePrompt('charDescription', 'system', charCtx.charDescription || '');
-        addBasePrompt('charPersonality', 'system', personalityText);
-        addBasePrompt('scenario', 'system', scenarioText);
-        addBasePrompt('personaDescription', 'system', charCtx.personaDescription || '');
+        if (isExplicitPromptEnabled('worldInfoBefore')) addBasePrompt('worldInfoBefore', 'system', worldInfo.worldInfoBefore || '');
+        if (isExplicitPromptEnabled('main')) addBasePrompt('main', 'system', 'You are {{char}}.');
+        if (isExplicitPromptEnabled('worldInfoAfter')) addBasePrompt('worldInfoAfter', 'system', worldInfo.worldInfoAfter || '');
+        if (isExplicitPromptEnabled('charDescription')) addBasePrompt('charDescription', 'system', charCtx.charDescription || '');
+        if (isExplicitPromptEnabled('charPersonality')) addBasePrompt('charPersonality', 'system', personalityText);
+        if (isExplicitPromptEnabled('scenario')) addBasePrompt('scenario', 'system', scenarioText);
+        if (isExplicitPromptEnabled('personaDescription')) addBasePrompt('personaDescription', 'system', charCtx.personaDescription || '');
         addBasePrompt('impersonate', 'system', impersonationText);
         addBasePrompt('quietPrompt', 'system', genControl.quietPrompt || '');
 
@@ -321,7 +328,7 @@ export class PromptAssembler {
         recordTiming(PIPELINE_STAGES.RELATIVE_SYSTEM_TOPOLOGY_PLACEMENT);
 
         const absolutePrompts = [];
-        const baseOrderedSequence = [
+        const defaultBaseOrderedSequence = [
             'worldInfoBefore',
             'main',
             'worldInfoAfter',
@@ -330,6 +337,18 @@ export class PromptAssembler {
             'scenario',
             'personaDescription',
         ];
+
+        // Browser-owned prompt collections preserve the active PromptManager
+        // order. Keep the historical order as a compatibility fallback for
+        // existing fixtures and legacy server callers that do not provide an
+        // explicit order.
+        const baseOrderedSequence = requestedPromptOrder.length
+            ? [...new Set([
+                ...requestedPromptOrder,
+                ...defaultBaseOrderedSequence,
+            ])]
+            : defaultBaseOrderedSequence;
+        const orderedPromptIds = new Set(baseOrderedSequence);
 
         // Root message slots (each slot is an array of messages representing that identifier's collection)
         const rootSlots = new Map();
@@ -356,7 +375,7 @@ export class PromptAssembler {
         const systemPrompts = ['nsfw', 'jailbreak'];
         const otherRelativePrompts = [];
         for (const [id, p] of basePromptsMap.entries()) {
-            if (baseOrderedSequence.includes(id) || id === 'impersonate' || id === 'quietPrompt') {
+            if (orderedPromptIds.has(id) || id === 'impersonate' || id === 'quietPrompt') {
                 continue;
             }
             if (p.injection_position === INJECTION_POSITION.ABSOLUTE) {
@@ -367,7 +386,7 @@ export class PromptAssembler {
         }
 
         for (const id of systemPrompts) {
-            if (basePromptsMap.has(id)) {
+            if (basePromptsMap.has(id) && !rootSlots.has(id)) {
                 const p = basePromptsMap.get(id);
                 if (p.injection_position !== INJECTION_POSITION.ABSOLUTE && !p.disabled && p.content) {
                     const tokens = tokenizer.countSync(p, id);

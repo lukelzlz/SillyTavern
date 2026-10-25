@@ -474,8 +474,10 @@ describe('Generation Orchestrator & Server Job Manager Test Suite', () => {
                 userId: 'alice',
                 body: {
                     model: 'test-model',
+                    core_prompt_mode: 'server_context',
                     messages: [{ role: 'user', content: 'client fallback prompt' }],
                     core_prompt_context: {
+                        schemaVersion: 1,
                         settings: {
                             source: 'openai',
                             model: 'test-model',
@@ -490,6 +492,7 @@ describe('Generation Orchestrator & Server Job Manager Test Suite', () => {
                             charDescription: 'A server-owned character description.',
                         },
                         worldInfo: { worldInfoBefore: '', worldInfoAfter: '' },
+                        promptOrder: ['main', 'charDescription', 'chatHistory'],
                         prompts: [],
                         extensionPrompts: {},
                         chatHistory: [{ role: 'user', content: 'Hello from server context.' }],
@@ -509,6 +512,7 @@ describe('Generation Orchestrator & Server Job Manager Test Suite', () => {
 
             expect(gatewayBodies).toHaveLength(1);
             expect(gatewayBodies[0].core_prompt_context).toBeUndefined();
+            expect(gatewayBodies[0].core_prompt_mode).toBeUndefined();
             expect(gatewayBodies[0].messages[0]).toEqual({ role: 'system', content: 'You are Seraphina.' });
             expect(gatewayBodies[0].messages).toEqual(expect.arrayContaining([
                 expect.objectContaining({ content: 'A server-owned character description.' }),
@@ -1313,6 +1317,7 @@ describe('Generation Orchestrator & Server Job Manager Test Suite', () => {
             expect(aliceWs.handshake.capabilities).toMatchObject({
                 orchestrator: true,
                 serverPromptAssembly: true,
+                browserPromptHandoff: false,
                 promptInterception: false,
             });
         });

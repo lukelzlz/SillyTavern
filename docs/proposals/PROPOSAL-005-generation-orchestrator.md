@@ -246,6 +246,15 @@ implementationBranch: feat/generation-orchestrator
    payload carries `core_prompt_context` and the server owns PromptAssembler
    plus the single plugin interception round-trip. Legacy jobs without this
    field retain the historical compatibility path.
+
+   The browser-to-server migration is capability-gated by
+   `core.generation.browserPromptHandoffEnabled` and is initially restricted
+   to normal, single-character, OpenAI text generations with streaming,
+   without tools, media, multi-swipe, structured output, or populated
+   post-history jailbreak prompts. When the capability is active, the browser
+   skips its local `CHAT_COMPLETION_PROMPT_READY` emission and the server owns
+   the one interception round-trip. If the optional Core transport cannot be
+   used, the browser restores the native hook before falling back to HTTP.
 2. **主动中止 (`generate:abort`)**:
    ```json
    {

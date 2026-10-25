@@ -171,8 +171,22 @@ describe('Core P0 Security Bleeding Controls', () => {
         expect(content).toContain('CORE_BRIDGE_NOT_READY');
         expect(content).toContain('core_generation_job_id');
         expect(content).toContain('core_prompt_ready_handled');
-        expect(content).toContain("core_prompt_mode = 'client_final'");
+        expect(content).toContain('generate_data.core_prompt_mode = promptMode');
+        expect(content).toContain("promptMode === 'server_context'");
+        expect(content).toContain('core_prompt_context');
+        expect(content).toContain('getCorePromptHandoffMode');
+        expect(content).toContain('serverOwnsPrompt');
         expect(content).toContain('core_request_id');
+    });
+
+    test('openai.js exposes a canonical browser prompt context serializer', () => {
+        const openaiScriptPath = path.resolve(process.cwd(), '../public/scripts/openai.js');
+        const content = fs.readFileSync(openaiScriptPath, 'utf8');
+
+        expect(content).toContain('export function buildCorePromptContext');
+        expect(content).toContain('schemaVersion: 1');
+        expect(content).toContain('promptOrder: collection.map');
+        expect(content).toContain('messages.slice().reverse()');
     });
 
     test('openai.js restores native in-place CHAT_COMPLETION_PROMPT_READY event emission', () => {

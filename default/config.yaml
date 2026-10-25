@@ -427,3 +427,7 @@ core:
     # Assemble explicit core_prompt_context payloads on the server before
     # plugin interception and gateway dispatch (default: true)
     serverPromptAssemblyEnabled: true
+    # Allow the browser to transfer constrained normal-chat prompt ownership
+    # to the server. Keep disabled until the deployment has accepted prompt
+    # parity for its active extensions (default: false).
+    browserPromptHandoffEnabled: false
