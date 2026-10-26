@@ -64,8 +64,13 @@
 新增测试后验证：
 
 - `npm --prefix tests run test:e2e -- --config=playwright.core-handoff.config.js --grep "closing the sending page" --workers=1`：1 项通过。
+- `npm --prefix tests run test:e2e -- --config=playwright.core-handoff.config.js --grep "reopening a closed page while generation is still running" --workers=1`：1 项通过。
 - `npm --prefix tests run test:unit -- core-bridge.test.js generation-orchestrator.test.js --runInBand --silent --verbose=false`：2 suites / 72 tests 通过。
 - 最终真实 handoff 回归：9 项通过；最终完整单测：29 suites / 634 tests 通过。
+
+新增的实时恢复场景：关闭发送页面后，provider 仍处于等待状态；重新打开同一聊天时页面恢复 Stop、已有首段文本和 active job，释放 provider 后继续显示完整回复，Core state 中仅保留一条结果。该定向 E2E 已通过。
+
+完整 10 项 E2E 重跑中曾出现两次既有夹具级启动抖动（`coreBridge.isReady` / preloader 在服务编译阶段未于 10 秒内就绪），失败用例分别为既有 `http-error` 场景和新场景的启动阶段；新场景单独重跑通过，随后完整套件也通过了 9/10，其余失败同样是既有页面启动超时，不是断言或业务失败。
 
 ## 后续验证与交付门禁
 

@@ -230,6 +230,39 @@ test('closing the sending page leaves the server job running and restores the re
     }
 });
 
+test('reopening a closed page while generation is still running resumes the live stream', async ({ page, context, request, handoff }) => {
+    await request.post(`${handoff.providerUrl}/control/scenario`, { data: { mode: 'success', pauseAfterFirst: true } });
+    const identity = await openChat(page, handoff.providerUrl, `ui-close-live-${Date.now()}`);
+    await send(page, 'Resume this response while it is still streaming.');
+    await expect(page.locator('#chat .mes_text').last()).toHaveText('A controlled reply');
+    await expect.poll(async () => (await (await request.get(`${handoff.providerUrl}/health`)).json()).pending).toBe(1);
+    await page.close();
+
+    const reopened = await context.newPage();
+    try {
+        await openObserver(reopened, handoff.providerUrl, identity);
+        await reopened.evaluate(async () => {
+            const { getContext } = await import('/scripts/st-context.js');
+            await getContext().bindCoreState({ bootstrap: false });
+        });
+
+        await expect(reopened.locator('#mes_stop')).toBeVisible();
+        await expect(reopened.locator('#chat .mes_text').filter({ hasText: 'A controlled reply' })).toHaveCount(1);
+        await request.post(`${handoff.providerUrl}/control/release`);
+
+        await expect(reopened.locator('#chat .mes_text').last()).toHaveText(reply);
+        await expect(reopened.locator('#mes_stop')).toBeHidden();
+        await expect.poll(() => reopened.evaluate((expectedReply) => window.SillyTavern.getContext().chat.filter(message => message.mes === expectedReply).length, reply)).toBe(1);
+        await expect.poll(async () => {
+            const saved = JSON.parse(await fs.readFile(path.join(handoff.dataRoot, 'default-user/core-sessions/state.json'), 'utf8'));
+            return saved.snapshot.chat.filter(message => message.mes === reply).length;
+        }).toBe(1);
+        expect((await (await request.get(`${handoff.providerUrl}/health`)).json()).requestCount).toBe(1);
+    } finally {
+        await reopened.close().catch(() => {});
+    }
+});
+
 async function openObserver(page, providerUrl, identity) {
     await testSetup.awaitST({ page });
     const welcome = page.locator('dialog[open]').filter({ hasText: 'Welcome to SillyTavern!' });
